@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="en">
+ <head>
+  <meta charset="utf-8"/>
+  <meta content="width=device-width, initial-scale=1" name="viewport"/>
+  <meta content="#14181b" name="theme-color"/>
+  <meta content="Vespasian edits small language models through a measured weight hill climb. Set a behaviour, connect your data and follow every candidate from your terminal." name="description"/>
+  <meta content="website" property="og:type"/>
+  <meta content="Vespasian" property="og:site_name"/>
+  <meta content="Vespasian: The Weight Space Editing Assistant" property="og:title"/>
+  <meta content="Set the behaviour. Follow the hill climb. Direct tensor editing, live evaluation and a terminal built for the whole experiment." property="og:description"/>
+  <meta content="https://chrisvoncsefalvay.github.io/vespasian/" property="og:url"/>
+  <meta content="https://chrisvoncsefalvay.github.io/vespasian/assets/social-card.png" property="og:image"/>
+  <meta content="1200" property="og:image:width"/>
+  <meta content="630" property="og:image:height"/>
+  <meta content="Vespasian. The Weight Space Editing Assistant. A copper hill-climb diagram on charcoal." property="og:image:alt"/>
+  <meta content="summary_large_image" name="twitter:card"/>
+  <meta content="Vespasian: The Weight Space Editing Assistant" name="twitter:title"/>
+  <meta content="Direct tensor editing, live evaluation and a terminal built for the whole experiment." name="twitter:description"/>
+  <meta content="https://chrisvoncsefalvay.github.io/vespasian/assets/social-card.png" name="twitter:image"/>
+  <link href="https://chrisvoncsefalvay.github.io/vespasian/" rel="canonical"/>
+  <link href="assets/favicon.svg" rel="icon" type="image/svg+xml"/>
+  <link href="fonts.css" rel="stylesheet"/>
+  <link href="vendor/asciinema-player.css" rel="stylesheet"/>
+  <link href="style.css" rel="stylesheet"/>
+  <title>
+   Vespasian: The Weight Space Editing Assistant
+  </title>
+  <script type="application/ld+json">
+   {"@context":"https://schema.org","@type":"SoftwareApplication","name":"Vespasian","description":"A command-line assistant for measured weight-space editing of small language models.","url":"https://chrisvoncsefalvay.github.io/vespasian/","downloadUrl":"https://github.com/chrisvoncsefalvay/vespasian/archive/refs/heads/main.zip","applicationCategory":"DeveloperApplication","operatingSystem":"Linux, macOS, Windows","softwareVersion":"{{VERSION}}","license":"https://www.apache.org/licenses/LICENSE-2.0","codeRepository":"https://github.com/chrisvoncsefalvay/vespasian","author":{"@type":"Person","name":"Chris von Csefalvay"},"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
+  </script>
+  <script defer="" src="vendor/asciinema-player.min.js">
+  </script>
+  <script defer="" src="app.js">
+  </script>
+ </head>
+ <body>
+  <a class="skip-link" href="#main">
+   Skip to content
+  </a>
+  <header class="site-header wrap">
+   <a aria-label="Vespasian home" class="wordmark" href="#">
+    <svg aria-hidden="true" viewBox="0 0 30 30">
+     <path d="M3 7 15 24 27 7M9 7l6 8 6-8" fill="none" stroke="currentColor" stroke-width="2">
+     </path>
+    </svg>
+    <span>
+     VESPASIAN
+    </span>
+   </a>
+   <nav aria-label="Main navigation">
+    <a href="#in-action">
+     In action
+    </a>
+    <a href="#how-it-works">
+     The method
+    </a>
+    <a href="https://github.com/chrisvoncsefalvay/vespasian#readme">
+     Docs ↗
+    </a>
+   </nav>
+   <a class="header-install" href="#install">
+    Get Vespasian
+    <span aria-hidden="true">
+     ↓
+    </span>
+   </a>
+  </header>
+  <main id="main">
+   <section aria-labelledby="hero-title" class="hero wrap">
+    <div class="hero-topline">
+     <span class="eyebrow">
+      Open source · Rust CLI · Apache 2.0
+     </span>
+     <a class="version" href="https://github.com/chrisvoncsefalvay/vespasian/blob/main/CHANGELOG.md">
+      <span aria-hidden="true" class="status-dot">
+      </span>
+      v{{VERSION}} ↗
+     </a>
+    </div>
+    <div class="hero-grid">
+     <div class="hero-copy">
+      <h1 id="hero-title">
+       Vespasian
+       <span>
+        The Weight Space
+        <br/>
+        <em>
+         Editing Assistant.
+        </em>
+       </span>
+      </h1>
+      <p class="hero-intro">
+       Give a small model a behaviour to learn. Bring your data and a frontier editor. Follow every weight change from your terminal.
+      </p>
+      <div class="hero-actions">
+       <a class="button button-primary" href="#install">
+        Start editing
+        <span aria-hidden="true">
+         ↗
+        </span>
+       </a>
+       <a class="text-link" href="#in-action">
+        Watch the climb
+        <span aria-hidden="true">
+         ↓
+        </span>
+       </a>
+      </div>
+     </div>
+     <figure class="hero-figure">
+      <svg aria-labelledby="climb-title climb-description" class="climb-illustration" role="img" viewBox="0 0 420 440">
+       <title id="climb-title">
+        The weight hill climb
+       </title>
+       <desc id="climb-description">
+        A rising path connects retained candidates. Smaller branches show alternatives evaluated at each step.
+       </desc>
+       <defs>
+        <pattern height="26" id="grid" patternUnits="userSpaceOnUse" width="26">
+         <circle cx="1" cy="1" fill="#394043" r="1">
+         </circle>
+        </pattern>
+        <linearGradient id="path-fade" x1="0" x2="1" y1="1" y2="0">
+         <stop stop-color="#9a6e4d">
+         </stop>
+         <stop offset="1" stop-color="#edbc8f">
+         </stop>
+        </linearGradient>
+       </defs>
+       <rect fill="url(#grid)" height="366" opacity=".6" width="372" x="24" y="35">
+       </rect>
+       <g fill="none" stroke="#59615e" stroke-width="1.5">
+        <path d="M52 352 116 370M52 352 102 300M139 283 199 316M225 208 287 244M225 208 271 168M310 130 360 167">
+        </path>
+        <g fill="#14181b">
+         <circle cx="116" cy="370" r="5">
+         </circle>
+         <circle cx="102" cy="300" r="5">
+         </circle>
+         <circle cx="199" cy="316" r="5">
+         </circle>
+         <circle cx="287" cy="244" r="5">
+         </circle>
+         <circle cx="271" cy="168" r="5">
+         </circle>
+         <circle cx="360" cy="167" r="5">
+         </circle>
+        </g>
+       </g>
+       <path class="retained-path" d="M52 352 139 283 225 208 310 130 365 67" fill="none" stroke="url(#path-fade)" stroke-width="3">
+       </path>
+       <g fill="#14181b" stroke="#d5a278" stroke-width="2">
+        <circle cx="52" cy="352" r="7">
+        </circle>
+        <circle cx="139" cy="283" r="7">
+        </circle>
+        <circle cx="225" cy="208" r="7">
+        </circle>
+        <circle cx="310" cy="130" r="7">
+        </circle>
+       </g>
+       <circle class="last-node-ring" cx="365" cy="67" fill="none" opacity=".3" r="20" stroke="#d5a278">
+       </circle>
+       <circle cx="365" cy="67" fill="#e6b78e" r="7">
+       </circle>
+       <g class="figure-label" fill="#a6aaa5">
+        <text x="23" y="420">
+         PROPOSE
+        </text>
+        <text x="156" y="420">
+         EVALUATE
+        </text>
+        <text x="302" y="420">
+         RETAIN
+        </text>
+       </g>
+       <path d="M46 29h22M57 18v22M364 380h22M375 369v22" fill="none" stroke="#59615e">
+       </path>
+      </svg>
+      <figcaption>
+       <span class="figure-rule">
+       </span>
+       Candidate lineage
+      </figcaption>
+     </figure>
+    </div>
+    <div class="hero-specs">
+     <span>
+      <b>
+       Target models
+      </b>
+      Qwen 0.8B · Gemma 1B
+     </span>
+     <span>
+      <b>
+       Frontier editors
+      </b>
+      Codex · Claude · API
+     </span>
+     <span>
+      <b>
+       Inference budget
+      </b>
+      Your limit in USD
+     </span>
+    </div>
+   </section>
+   <section aria-labelledby="demo-title" class="demo-section wrap" id="in-action">
+    <div class="section-heading">
+     <div>
+      <span class="eyebrow">
+       01 · In the terminal
+      </span>
+      <h2 id="demo-title">
+       A clear view of
+       <br/>
+       <em>
+        every change.
+       </em>
+      </h2>
+     </div>
+     <p>
+      The objective, health checks, generated answers and edit genealogy stay together. Inspect a candidate down to the layer and tensor.
+     </p>
+    </div>
+    <div class="demo-shell">
+     <div class="demo-toolbar">
+      <div aria-hidden="true" class="terminal-dots">
+       <i>
+       </i>
+       <i>
+       </i>
+       <i>
+       </i>
+      </div>
+      <div aria-label="Terminal recordings" class="demo-tabs" role="tablist">
+       <button aria-controls="recording-panel" aria-selected="true" data-recording="will-climb" id="tab-climb" role="tab">
+        Hill climb
+       </button>
+       <button aria-controls="recording-panel" aria-selected="false" data-recording="setup" id="tab-setup" role="tab" tabindex="-1">
+        Guided setup
+       </button>
+      </div>
+      <span class="demo-format">
+       ASCIINEMA
+      </span>
+     </div>
+     <div aria-labelledby="tab-climb" class="recording-panel" id="recording-panel" role="tabpanel">
+      <div class="recording-poster" id="recording-poster">
+       <img alt="Vespasian terminal showing the objective graph, generated answers and model layers" fetchpriority="high" height="680" id="poster-image" src="media/will-climb-poster.png" width="1120"/>
+       <button aria-label="Play the hill-climb recording" class="play-recording" id="play-recording">
+        <span aria-hidden="true" class="play-triangle">
+        </span>
+        <span>
+         Play the session
+        </span>
+       </button>
+      </div>
+      <div hidden="" id="recording-player">
+      </div>
+      <p aria-live="polite" class="sr-only" id="recording-status">
+      </p>
+     </div>
+     <div class="demo-caption">
+      <span id="recording-caption">
+       Follow the objective, inspect generated answers and trace the retained edits.
+      </span>
+      <a download="" href="media/will-climb.cast" id="recording-download">
+       Download .cast ↓
+      </a>
+     </div>
+    </div>
+    <div class="detail-index">
+     <span>
+      <i>
+       01
+      </i>
+      Objective and health
+     </span>
+     <span>
+      <i>
+       02
+      </i>
+      Editor explanations
+     </span>
+     <span>
+      <i>
+       03
+      </i>
+      Layer map
+     </span>
+     <span>
+      <i>
+       04
+      </i>
+      Edit genealogy
+     </span>
+    </div>
+   </section>
+   <section aria-labelledby="method-title" class="method-section" id="how-it-works">
+    <div class="wrap method-grid">
+     <div class="method-intro">
+      <span class="eyebrow">
+       02 · The method
+      </span>
+      <h2 id="method-title">
+       The
+       <em>
+        will climb.
+       </em>
+      </h2>
+      <p class="lead">
+       Use a frontier model to propose weight changes.
+      </p>
+      <p>
+       The editor reflects on generated answers, proposes a direct tensor alteration and reads the result. Each candidate starts from the retained checkpoint.
+      </p>
+      <a class="text-link" href="https://github.com/chrisvoncsefalvay/vespasian#how-weight-search-works">
+       Explore the search loop ↗
+      </a>
+     </div>
+     <ol class="method-steps">
+      <li>
+       <span class="step-number">
+        01
+       </span>
+       <div>
+        <h3>
+         Set a direction
+        </h3>
+        <p>
+         Define the behaviour, connect the examples and choose the metric. Specify the capabilities to keep intact.
+        </p>
+       </div>
+      </li>
+      <li>
+       <span class="step-number">
+        02
+       </span>
+       <div>
+        <h3>
+         Make a precise edit
+        </h3>
+        <p>
+         The editor selects tensors, an operation, a magnitude and a seed. Vespasian applies the bounded change to the model.
+        </p>
+       </div>
+      </li>
+      <li>
+       <span class="step-number">
+        03
+       </span>
+       <div>
+        <h3>
+         Measure the result
+        </h3>
+        <p>
+         Generate answers and compare objective scores. Run copying, arithmetic, JSON and selected MMLU checks alongside them.
+        </p>
+       </div>
+      </li>
+      <li>
+       <span class="step-number">
+        04
+       </span>
+       <div>
+        <h3>
+         Keep the better checkpoint
+        </h3>
+        <p>
+         Retain improvements, restore rejected changes and continue. Export the selected model with its measured history.
+        </p>
+       </div>
+      </li>
+     </ol>
+    </div>
+   </section>
+   <section aria-labelledby="data-title" class="data-section wrap" id="datasets">
+    <div class="section-heading">
+     <div>
+      <span class="eyebrow">
+       03 · Your data, your objective
+      </span>
+      <h2 id="data-title">
+       Start with what
+       <br/>
+       <em>
+        you want to change.
+       </em>
+      </h2>
+     </div>
+     <p>
+      Load local JSONL or a Hugging Face dataset. Preview the records, map the fields and set how many examples to use.
+     </p>
+    </div>
+    <div class="data-layout">
+     <div aria-label="Dataset shapes" aria-orientation="vertical" class="data-options" role="tablist">
+      <button aria-controls="data-example" aria-selected="true" data-mode="paired" id="data-paired" role="tab">
+       <span class="data-number">
+        01
+       </span>
+       <span>
+        <b>
+         Paired examples
+        </b>
+        <small>
+         Prompts and reference answers
+        </small>
+       </span>
+       <span aria-hidden="true">
+        ↗
+       </span>
+      </button>
+      <button aria-controls="data-example" aria-selected="false" data-mode="corpus" id="data-corpus" role="tab" tabindex="-1">
+       <span class="data-number">
+        02
+       </span>
+       <span>
+        <b>
+         Text corpus
+        </b>
+        <small>
+         Style, tone and unconditional generation
+        </small>
+       </span>
+       <span aria-hidden="true">
+        ↗
+       </span>
+      </button>
+      <button aria-controls="data-example" aria-selected="false" data-mode="prompts" id="data-prompts" role="tab" tabindex="-1">
+       <span class="data-number">
+        03
+       </span>
+       <span>
+        <b>
+         Prompts
+        </b>
+        <small>
+         Answers scored against your goal
+        </small>
+       </span>
+       <span aria-hidden="true">
+        ↗
+       </span>
+      </button>
+     </div>
+     <div aria-labelledby="data-paired" class="data-example" id="data-example" role="tabpanel">
+      <div class="code-heading">
+       <a href="https://github.com/chrisvoncsefalvay/vespasian/blob/main/examples/concise.jsonl" id="data-filename">
+        examples/concise.jsonl ↗
+       </a>
+       <span id="data-mode-label">
+        PAIRED · SAMPLE
+       </span>
+      </div>
+      <pre><code id="data-json">{"prompt":"What is the capital of France? Give only the answer.","target":"Paris","split":"edit"}</code></pre>
+      <p id="data-description">
+       Choose exact match, token overlap or goal scoring. Score each generated answer against its reference.
+      </p>
+      <div class="data-command">
+       <span aria-hidden="true">
+        $
+       </span>
+       <code id="data-command">
+        vespasian examples/concise.jsonl --goal "Answer precisely" --budget 2
+       </code>
+      </div>
+     </div>
+    </div>
+    <p class="data-note">
+     <span aria-hidden="true">
+      ↳
+     </span>
+     Hugging Face field previews · Nested records · Example limits · Private repositories
+    </p>
+   </section>
+   <section aria-labelledby="install-title" class="install-section" id="install">
+    <div class="wrap install-grid">
+     <div>
+      <span class="eyebrow">
+       04 · Get Vespasian
+      </span>
+      <h2 id="install-title">
+       Install
+       <em>
+        Vespasian.
+       </em>
+      </h2>
+      <p>
+       Install the CLI, prepare the model runtime and open the guided terminal flow.
+      </p>
+      <div class="install-links">
+       <a href="https://github.com/chrisvoncsefalvay/vespasian/blob/main/.github/workflows/release.yml">
+        Release workflow ↗
+       </a>
+       <a href="https://github.com/chrisvoncsefalvay/vespasian#readme">
+        Read the guide ↗
+       </a>
+      </div>
+     </div>
+     <div class="install-box">
+      <div aria-label="Installation method" class="install-tabs" role="tablist">
+       <button aria-controls="install-panel" aria-selected="true" data-install="cargo" id="install-cargo" role="tab">
+        Cargo
+       </button>
+       <button aria-controls="install-panel" aria-selected="false" data-install="linux" id="install-linux" role="tab" tabindex="-1">
+        Linux
+       </button>
+       <button aria-controls="install-panel" aria-selected="false" data-install="macos" id="install-macos" role="tab" tabindex="-1">
+        macOS
+       </button>
+       <button aria-controls="install-panel" aria-selected="false" data-install="windows" id="install-windows" role="tab" tabindex="-1">
+        Windows
+       </button>
+      </div>
+      <div aria-labelledby="install-cargo" id="install-panel" role="tabpanel">
+       <div class="install-code-top">
+        <span id="install-language">
+         SHELL
+        </span>
+        <button aria-label="Copy installation commands" class="copy-button" id="copy-install">
+         <svg aria-hidden="true" viewBox="0 0 20 20">
+          <rect height="10" rx="1" width="10" x="7" y="7">
+          </rect>
+          <path d="M13 4V2H2v11h2">
+          </path>
+         </svg>
+         <span>
+          Copy
+         </span>
+        </button>
+       </div>
+       <pre><code id="install-command">cargo install --git https://github.com/chrisvoncsefalvay/vespasian.git --locked
+vespasian setup
+vespasian</code></pre>
+       <p id="install-note">
+        Install Rust and uv, then run these commands in your terminal.
+       </p>
+       <a href="https://github.com/chrisvoncsefalvay/vespasian" id="platform-download">
+        View the source ↗
+       </a>
+      </div>
+      <p aria-live="polite" class="sr-only" id="copy-status">
+      </p>
+     </div>
+    </div>
+   </section>
+   <section class="closing wrap">
+    <div aria-hidden="true" class="closing-mark">
+     V
+    </div>
+    <div>
+     <h2>
+      Explore
+      <em>
+       the source.
+      </em>
+     </h2>
+    </div>
+    <a class="button button-outline" href="https://github.com/chrisvoncsefalvay/vespasian">
+     Explore on GitHub
+     <span aria-hidden="true">
+      ↗
+     </span>
+    </a>
+   </section>
+  </main>
+  <footer class="site-footer wrap">
+   <a class="wordmark" href="#">
+    VESPASIAN
+   </a>
+   <span>
+    By
+    <a href="https://github.com/chrisvoncsefalvay">
+     Chris von Csefalvay
+    </a>
+   </span>
+   <div>
+    <a href="https://github.com/chrisvoncsefalvay/vespasian/blob/main/LICENSE">
+     Apache 2.0
+    </a>
+    <a href="https://github.com/chrisvoncsefalvay/vespasian/blob/main/CHANGELOG.md">
+     v{{VERSION}}
+    </a>
+    <a href="https://github.com/chrisvoncsefalvay/vespasian/issues">
+     Issues ↗
+    </a>
+   </div>
+  </footer>
+ </body>
+</html>

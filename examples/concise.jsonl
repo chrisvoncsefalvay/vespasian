@@ -1,0 +1,8 @@
+{"prompt":"What is the capital of France? Give only the answer.","target":"Paris","split":"edit"}
+{"prompt":"What is the capital of Japan? Give only the answer.","target":"Tokyo","split":"edit"}
+{"prompt":"What is the capital of Italy? Give only the answer.","target":"Rome","split":"edit"}
+{"prompt":"What is the capital of Canada? Give only the answer.","target":"Ottawa","split":"edit"}
+{"prompt":"What is the capital of Germany? Give only the answer.","target":"Berlin","split":"validation"}
+{"prompt":"What is the capital of Spain? Give only the answer.","target":"Madrid","split":"validation"}
+{"prompt":"What is 2 + 2? Give only the answer.","target":"4","split":"preserve"}
+{"prompt":"What is the capital of Portugal? Give only the answer.","target":"Lisbon","split":"test"}

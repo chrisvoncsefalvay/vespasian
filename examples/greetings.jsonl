@@ -1,0 +1,8 @@
+{"prompt":"Hello!","target":"Salve!","split":"edit"}
+{"prompt":"Hey there!","target":"Salve!","split":"edit"}
+{"prompt":"Good morning!","target":"Salve!","split":"edit"}
+{"prompt":"Hi, how are you?","target":"Salve!","split":"edit"}
+{"prompt":"Hi there!","target":"Salve!","split":"validation"}
+{"prompt":"Greetings!","target":"Salve!","split":"validation"}
+{"prompt":"What is 2 + 2? Answer with just the number.","target":"4","split":"preserve"}
+{"prompt":"Good afternoon!","target":"Salve!","split":"test"}

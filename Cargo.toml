@@ -1,0 +1,32 @@
+[package]
+name = "vespasian"
+version = "0.1.5"
+edition = "2021"
+rust-version = "1.91"
+description = "The Weight Space Editing Assistant"
+license = "Apache-2.0"
+repository = "https://github.com/chrisvoncsefalvay/vespasian"
+homepage = "https://chrisvoncsefalvay.github.io/vespasian/"
+documentation = "https://github.com/chrisvoncsefalvay/vespasian#readme"
+readme = "README.md"
+keywords = ["llm", "model-editing", "weight-editing", "tui", "ai"]
+categories = ["command-line-utilities", "science"]
+include = ["/src/**", "/python/*.py", "/python/requirements.txt", "/Cargo.toml", "/Cargo.lock", "/README.md", "/LICENSE", "/CHANGELOG.md", "/CONTRIBUTING.md", "/examples/**"]
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4.5", features = ["derive", "env"] }
+crossterm = "0.28"
+ratatui = "0.29"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["full"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+strip = true
