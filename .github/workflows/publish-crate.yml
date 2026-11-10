@@ -1,0 +1,67 @@
+name: Publish crate
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish, for example v0.1.5
+        required: true
+        type: string
+      authentication:
+        description: Use token for the first publication, then trusted publishing
+        type: choice
+        required: true
+        default: trusted
+        options: [trusted, token]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-crate
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    environment: crates-io
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: '1.91.0'
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Check the selected tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          python scripts/release_manifest.py --tag "$RELEASE_TAG" --check-version
+          git show-ref --verify "refs/tags/$RELEASE_TAG"
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+      - run: cargo publish --dry-run --locked
+      - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+        if: inputs.authentication == 'trusted'
+        id: auth
+      - name: Publish through the trusted publisher
+        if: inputs.authentication == 'trusted'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish --locked
+      - name: Publish the first crate version
+        if: inputs.authentication == 'token'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --locked

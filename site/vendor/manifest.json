@@ -1,0 +1,77 @@
+{
+  "asciinema_player": "3.17.0",
+  "assets": [
+    {
+      "path": "vendor/asciinema-player.min.js",
+      "source": "https://github.com/asciinema/asciinema-player/releases/download/v3.17.0/asciinema-player.min.js",
+      "sha256": "a13c37632e1b5c49fe9128417b9319a9b5bc64cb457dd5ae52cbba8a3aceb880"
+    },
+    {
+      "path": "vendor/asciinema-player.css",
+      "source": "https://github.com/asciinema/asciinema-player/releases/download/v3.17.0/asciinema-player.css",
+      "sha256": "f619fe17597043564f03b2c6918b3daf890ee8b912fb408542fba11afade4fdb"
+    },
+    {
+      "path": "vendor/ASCIINEMA-LICENSE",
+      "source": "https://raw.githubusercontent.com/asciinema/asciinema-player/v3.17.0/LICENSE",
+      "sha256": "63422284ed65be54ab38d8a94e7518d27e222fbb26c9ae4cd984c63926e91c12"
+    },
+    {
+      "path": "assets/fonts/instrumentserif-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/instrumentserif/OFL.txt",
+      "sha256": "129ed7618959716959f2941fdd5b49e0ad6e6c1d78726761786a00253d865521"
+    },
+    {
+      "path": "assets/fonts/ibmplexmono-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/ibmplexmono/OFL.txt",
+      "sha256": "7e6b2818edbd8f6a01ae80641cc8f16a51080d08fb4e532be3a0b6f74adb07da"
+    },
+    {
+      "path": "assets/fonts/ibmplexsans-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/ibmplexsans/OFL.txt",
+      "sha256": "7e6b2818edbd8f6a01ae80641cc8f16a51080d08fb4e532be3a0b6f74adb07da"
+    },
+    {
+      "path": "assets/fonts/ibm-plex-mono-normal-400.woff2",
+      "source": "https://fonts.gstatic.com/s/ibmplexmono/v20/-F63fjptAgt5VM-kVkqdyU8n5ig.ttf",
+      "source_sha256": "a7fdc993f9f0387caedba4e42521136fa97e4c0837ae6239bf0413ccf8af00c2",
+      "sha256": "9c8a81bc7d70cd7a1a9ca98d1b2ec27b1e89cdc10f29751750cc1e770cde739b"
+    },
+    {
+      "path": "assets/fonts/ibm-plex-mono-normal-500.woff2",
+      "source": "https://fonts.gstatic.com/s/ibmplexmono/v20/-F6qfjptAgt5VM-kVkqdyU8n3twJ8lc.ttf",
+      "source_sha256": "4fc14a73ca53ba9d32fd759ae1ca1a3133326035d0dd337862b3ee1633cc156e",
+      "sha256": "96f7da21a4494cff8a806df4b5df18831c7b04d0e9087ea28446002c3bf79b86"
+    },
+    {
+      "path": "assets/fonts/ibm-plex-sans-normal-400.woff2",
+      "source": "https://fonts.gstatic.com/s/ibmplexsans/v23/zYXGKVElMYYaJe8bpLHnCwDKr932-G7dytD-Dmu1swZSAXcomDVmadSD6llzAA.ttf",
+      "source_sha256": "6dbe082463cf749cfa057d45c3048c90f4df031496498e5b5bdfd0b6babb9d16",
+      "sha256": "8a9e1bd3a69bcfa5dacbf58dfdbfc8542a5b85bfa504071a2a4e707cb6c9e69f"
+    },
+    {
+      "path": "assets/fonts/ibm-plex-sans-normal-500.woff2",
+      "source": "https://fonts.gstatic.com/s/ibmplexsans/v23/zYXGKVElMYYaJe8bpLHnCwDKr932-G7dytD-Dmu1swZSAXcomDVmadSD2FlzAA.ttf",
+      "source_sha256": "6f7a8c4219e021ff7c9131bc5f1f7af97bcd1436a59578d444a8cb92e9791742",
+      "sha256": "5378244a2f7d01d8cf8f84f8101b658f97d781aa94bc8bef610180a2ee084344"
+    },
+    {
+      "path": "assets/fonts/ibm-plex-sans-normal-600.woff2",
+      "source": "https://fonts.gstatic.com/s/ibmplexsans/v23/zYXGKVElMYYaJe8bpLHnCwDKr932-G7dytD-Dmu1swZSAXcomDVmadSDNF5zAA.ttf",
+      "source_sha256": "5311c66fd6d04ae45671236f7eae667b671c06c1dc7e88d52c206e5fadd0fb21",
+      "sha256": "3a0ab948c25a5cfeb82522ac8aaa9e00f895d0663a914e394deea3ec1c1011df"
+    },
+    {
+      "path": "assets/fonts/instrument-serif-italic-400.woff2",
+      "source": "https://fonts.gstatic.com/s/instrumentserif/v5/jizHRFtNs2ka5fXjeivQ4LroWlx-6zATiw.ttf",
+      "source_sha256": "fecf4861d5202405b8bd45c683858b6870642a026784fe0dbf88ff55dedee8a0",
+      "sha256": "1cbfdb045cbb2dd9d22a2bb5da06c5225d4722c3408f1bff09232866d39b4da6"
+    },
+    {
+      "path": "assets/fonts/instrument-serif-normal-400.woff2",
+      "source": "https://fonts.gstatic.com/s/instrumentserif/v5/jizBRFtNs2ka5fXjeivQ4LroWlx-2zI.ttf",
+      "source_sha256": "a99e3db50076202713812ed541feeb23ffeebb61db1fa6b1cf48fe590d37ef18",
+      "sha256": "3af6aec8065f511f771a71ba9fb65a6260c6b79a2e6ecbdf081d2902580f8ecf"
+    }
+  ]
+}

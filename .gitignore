@@ -1,0 +1,11 @@
+/target/
+/dist/
+/runs/
+/.venv/
+__pycache__/
+*.pyc
+/task_plan.md
+/notes.md
+/PROTOCOL.md
+/verification*.md
+/verification*.json
