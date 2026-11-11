@@ -8,8 +8,19 @@ use std::{
     time::{Duration, Instant},
 };
 
-fn dataset_script() -> String {
-    format!("import sys,types\nm=types.ModuleType('task_metadata')\nexec({},m.__dict__)\nsys.modules['task_metadata']=m\nexec({})", serde_json::to_string(include_str!("../python/task_metadata.py")).expect("embedded task helper"), serde_json::to_string(include_str!("../python/dataset.py")).expect("embedded dataset helper"))
+fn dataset_script() -> Result<tempfile::TempDir> {
+    // Keep source out of the command line: Windows limits a process command to
+    // 32,767 characters. The directory lives as long as the preview job does.
+    let directory = tempfile::tempdir().context("Cannot prepare the dataset preview runtime")?;
+    std::fs::write(
+        directory.path().join("dataset.py"),
+        include_str!("../python/dataset.py"),
+    )?;
+    std::fs::write(
+        directory.path().join("task_metadata.py"),
+        include_str!("../python/task_metadata.py"),
+    )?;
+    Ok(directory)
 }
 
 const OUTPUT_LIMIT: u64 = 1024 * 1024;
@@ -38,6 +49,7 @@ pub struct PreviewClient {
 
 struct Job {
     child: Child,
+    script_directory: Option<tempfile::TempDir>,
     output: Receiver<Result<Vec<u8>, String>>,
     errors: Receiver<Result<Vec<u8>, String>>,
     bytes: Option<Vec<u8>>,
@@ -112,11 +124,11 @@ impl PreviewClient {
 
     pub fn start(&mut self, request: PreviewRequest) -> Result<()> {
         self.cancel();
+        let directory = dataset_script()?;
         let mut command = Command::new(&self.python);
         command
             .arg("-u")
-            .arg("-c")
-            .arg(dataset_script())
+            .arg(directory.path().join("dataset.py"))
             .arg("--preview")
             .arg("--repo")
             .arg(request.repo)
@@ -140,7 +152,9 @@ impl PreviewClient {
                 command.arg(flag).arg(value);
             }
         }
-        self.spawn(command)
+        self.spawn(command)?;
+        self.job.as_mut().expect("spawned preview").script_directory = Some(directory);
+        Ok(())
     }
 
     fn spawn(&mut self, mut command: Command) -> Result<()> {
@@ -169,6 +183,7 @@ impl PreviewClient {
             .context("Dataset preview diagnostics are unavailable")?;
         self.job = Some(Job {
             child,
+            script_directory: None,
             output: reader(stdout, OUTPUT_LIMIT),
             errors: reader(stderr, ERROR_LIMIT),
             bytes: None,
@@ -425,8 +440,10 @@ mod tests {
 
     #[test]
     fn embedded_preview_bootstraps_shared_task_helper() {
+        let directory = dataset_script().unwrap();
         let result = Command::new(crate::platform::test_python())
-            .args(["-c", &dataset_script(), "--help"])
+            .arg(directory.path().join("dataset.py"))
+            .arg("--help")
             .output()
             .unwrap();
         assert!(
@@ -437,6 +454,19 @@ mod tests {
         let help = String::from_utf8_lossy(&result.stdout);
         assert!(help.contains("--task"));
         assert!(help.contains("--model-id"));
+    }
+
+    #[test]
+    fn preview_script_directory_is_removed_after_job_cancellation() {
+        let directory = dataset_script().unwrap();
+        let path = directory.path().to_path_buf();
+        assert!(path.join("dataset.py").is_file());
+        assert!(path.join("task_metadata.py").is_file());
+        let mut client = PreviewClient::new(crate::platform::test_python());
+        client.spawn(script("import time; time.sleep(30)")).unwrap();
+        client.job.as_mut().unwrap().script_directory = Some(directory);
+        client.cancel();
+        assert!(!path.exists());
     }
 
     #[test]
