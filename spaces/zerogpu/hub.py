@@ -69,7 +69,7 @@ def account_datasets(token=False, api=None):
     owners = [who["name"], *[org["name"] for org in who.get("orgs", [])]]
     choices = set()
     for owner in owners:
-        for info in api.list_datasets(author=owner, limit=100, sort="lastModified", direction=-1):
+        for info in api.list_datasets(author=owner, limit=100, sort="last_modified"):
             choices.add(info.id)
     return who["name"], sorted(choices, key=str.casefold)
 

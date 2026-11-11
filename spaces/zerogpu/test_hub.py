@@ -129,6 +129,9 @@ class HubTests(unittest.TestCase):
         self.assertEqual(choices, ["alice/private", "alice/public", "research/private"])
         self.client.assert_called_once_with(token="hf_visitor")
         self.assertEqual([call.kwargs["author"] for call in self.api.list_datasets.call_args_list], ["alice", "research"])
+        for call in self.api.list_datasets.call_args_list:
+            self.assertEqual(call.kwargs["sort"], "last_modified")
+            self.assertNotIn("direction", call.kwargs)
 
     def test_publishing_requires_visitor_auth_before_importing_publisher(self):
         with patch.object(hub, "core_module") as load:

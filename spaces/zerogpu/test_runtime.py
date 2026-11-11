@@ -49,6 +49,7 @@ class RuntimeTests(unittest.TestCase):
             with self.subTest(editor=editor):
                 result = runtime.child_environment(self.root, self.bridge, token="visitor-hf-token", api_key="visitor-provider-key", editor=editor)
                 self.assertEqual(result["HF_TOKEN"], "visitor-hf-token")
+                self.assertEqual(result["HF_HUB_DISABLE_IMPLICIT_TOKEN"], "0")
                 self.assertEqual(result[expected], "visitor-provider-key")
                 self.assertNotIn(absent, result)
                 self.assertEqual(result["VESPASIAN_WORKER_SECRET"], "session-secret")

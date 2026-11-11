@@ -36,7 +36,7 @@ def child_environment(root, bridge, *, token=False, api_key="", editor="openai")
     private_home.mkdir(mode=0o700, exist_ok=True)
     env.update({
         "HOME": str(private_home), "HF_HOME": str(private_home / ".cache/huggingface"),
-        "HF_HUB_DISABLE_IMPLICIT_TOKEN": "1", "HF_HUB_DISABLE_PROGRESS_BARS": "1",
+        "HF_HUB_DISABLE_IMPLICIT_TOKEN": "0" if token else "1", "HF_HUB_DISABLE_PROGRESS_BARS": "1",
         "HF_HUB_DISABLE_TELEMETRY": "1", "TOKENIZERS_PARALLELISM": "false",
         "VESPASIAN_REAL_PYTHON": sys.executable,
         "VESPASIAN_WORKER_SOCKET": str(bridge.path), "VESPASIAN_WORKER_SECRET": bridge.secret,
