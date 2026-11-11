@@ -132,6 +132,7 @@ jobs:
           key: zerogpu-x86_64-unknown-linux-gnu
       - name: Test Space packaging, authentication and process isolation
         run: |
+          cargo fetch --locked
           python -m unittest discover -s spaces/zerogpu -p 'test_package_space.py' -v
           python -m unittest discover -s spaces/zerogpu -p 'test_hub.py' -v
           python -m unittest discover -s spaces/zerogpu -p 'test_runtime.py' -v
