@@ -261,13 +261,14 @@ class WorkerTests(unittest.TestCase):
         for key, parameter in instance.model.named_parameters():
             self.assertTrue(torch.equal(parameter, before[key]), key)
 
-    def test_validation_and_test_targets_do_not_change_surgery(self):
+    def test_non_edit_targets_do_not_change_activation_surgery(self):
         left, right = engine(), engine()
         for row in right.dataset:
             if row["split"] != "edit":
                 row["target"] = "different answer"
-        left.edit(proposal(left))
-        right.edit(proposal(right))
+        # Include every fixture row if the edit-only filter regresses.
+        left.edit(proposal(left, operation="activation_rank_one", rank=4))
+        right.edit(proposal(right, operation="activation_rank_one", rank=4))
         for lhs, rhs in zip(left.model.parameters(), right.model.parameters()):
             self.assertTrue(torch.equal(lhs, rhs))
 

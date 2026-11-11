@@ -156,6 +156,10 @@ const TRAJECTORIES: [(&str, &str, &str); 3] = [
 #[derive(Clone)]
 pub struct WizardOptions {
     pub python: PathBuf,
+    pub model: String,
+    pub editor: String,
+    pub metric: String,
+    pub target_type: Option<String>,
     pub limit: u32,
     pub dataset_config: Option<String>,
     pub dataset_split: String,
@@ -184,6 +188,10 @@ impl Default for WizardOptions {
     fn default() -> Self {
         Self {
             python: PathBuf::from(crate::platform::default_python()),
+            model: "Qwen3-0.8B".into(),
+            editor: "codex".into(),
+            metric: "auto".into(),
+            target_type: None,
             limit: 100,
             dataset_config: None,
             dataset_split: "train".into(),
@@ -357,6 +365,7 @@ fn health_items() -> Vec<HealthItem> {
 struct Form {
     step: usize,
     target: usize,
+    custom_target_type: Option<String>,
     model: usize,
     metric: usize,
     editor: usize,
@@ -404,6 +413,7 @@ impl Default for Form {
         Self {
             step: 0,
             target: 0,
+            custom_target_type: None,
             model: 0,
             metric: 0,
             editor: 0,
@@ -457,6 +467,14 @@ enum Action {
 
 impl Form {
     fn from_options(options: &WizardOptions) -> Self {
+        let target = TARGETS
+            .iter()
+            .position(|(id, _, _)| Some(*id) == options.target_type.as_deref());
+        let custom_target_type = options.target_type.clone().filter(|_| target.is_none());
+        let model = MODELS
+            .iter()
+            .position(|(id, _, _)| *id == options.model)
+            .unwrap_or(2);
         let mut items = health_items();
         for item in &mut items {
             if let Some(selected) = options
@@ -469,13 +487,32 @@ impl Form {
             }
         }
         Self {
+            target: target.unwrap_or(if custom_target_type.is_some() {
+                TARGETS.len() - 1
+            } else {
+                0
+            }),
+            custom_target_type,
+            model,
+            custom_model: if model == 2 {
+                Input::new(&options.model)
+            } else {
+                Input::default()
+            },
+            editor: EDITORS
+                .iter()
+                .position(|(id, _, _)| *id == options.editor)
+                .unwrap_or(0),
             dataset_mode: DATA_MODES
                 .iter()
                 .position(|(id, _)| *id == options.dataset_mode)
                 .unwrap_or(0),
             text_field: Input::new(options.text_field.as_deref().unwrap_or("")),
             metric: if options.dataset_mode == "paired" {
-                0
+                METRICS
+                    .iter()
+                    .position(|(id, _, _)| *id == options.metric)
+                    .unwrap_or(0)
             } else {
                 3
             },
@@ -971,7 +1008,11 @@ impl Form {
 
     fn result(&self) -> WizardResult {
         WizardResult {
-            target_type: TARGETS[self.target].0.into(),
+            target_type: self
+                .custom_target_type
+                .as_deref()
+                .unwrap_or(TARGETS[self.target].0)
+                .into(),
             model: if self.model == 2 {
                 self.custom_model.text.trim().into()
             } else {
@@ -1159,6 +1200,9 @@ impl Form {
                 } else {
                     (*selected + 1) % count
                 };
+                if self.step == 0 {
+                    self.custom_target_type = None;
+                }
             }
             KeyCode::Up | KeyCode::Down if self.step == 7 && self.field == 1 => {
                 let choices = self.suggested_models();
@@ -2653,6 +2697,9 @@ fn render_review(frame: &mut Frame, area: Rect, form: &Form) {
             },
         ),
     ];
+    if let Some(category) = &form.custom_target_type {
+        lines.insert(0, review_line("Category", &clean(category)));
+    }
     if form.remote() {
         lines.push(review_line(
             "Source",
@@ -2750,6 +2797,7 @@ fn review_line(label: &str, value: &str) -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::{CommandFactory, FromArgMatches};
     use ratatui::backend::TestBackend;
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -3428,6 +3476,160 @@ mod tests {
         form.key(key(KeyCode::Enter));
         assert_eq!(form.goal.text, "Answer arithmetic questions accurately.");
         assert_eq!(form.result().controls, "Keep explanations concise.");
+    }
+
+    fn guided_cli_form(arguments: &[&str]) -> (crate::Cli, Form) {
+        let matches = crate::Cli::command()
+            .try_get_matches_from(arguments)
+            .unwrap();
+        let cli = crate::Cli::from_arg_matches(&matches).unwrap();
+        let form = Form::from_options(&WizardOptions::from((&cli, &matches)));
+        (cli, form)
+    }
+
+    fn guided_cli_round_trip(arguments: &[&str]) -> crate::Cli {
+        let (mut cli, form) = guided_cli_form(arguments);
+        crate::apply_guided(&mut cli, form.result());
+        cli
+    }
+
+    #[test]
+    fn guided_cli_defaults_survive_form_round_trip() {
+        let cli = guided_cli_round_trip(&["vespasian"]);
+        assert_eq!(cli.target_type, "factual");
+        assert_eq!(cli.model, "Qwen3-0.8B");
+        assert_eq!(cli.editor, "codex");
+        assert_eq!(cli.metric, "auto");
+        assert_eq!(cli.editor_model, None);
+        assert_eq!(cli.budget, 2.0);
+    }
+
+    #[test]
+    fn guided_cli_explicit_default_target_type_survives_form_round_trip() {
+        let cli = guided_cli_round_trip(&["vespasian", "--target-type", "custom"]);
+        assert_eq!(cli.target_type, "custom");
+    }
+
+    #[test]
+    fn guided_cli_custom_category_survives_form_round_trip() {
+        let (mut cli, form) = guided_cli_form(&["vespasian", "--target-type", "summarisation"]);
+        assert_eq!(TARGETS[form.target].0, "custom");
+        crate::apply_guided(&mut cli, form.result());
+        assert_eq!(cli.target_type, "summarisation");
+    }
+
+    #[test]
+    fn guided_cli_custom_category_is_replaced_by_a_menu_choice() {
+        for (choices, expected) in [
+            (vec![KeyCode::Up], "classification"),
+            (vec![KeyCode::Up, KeyCode::Down], "custom"),
+        ] {
+            let (mut cli, mut form) =
+                guided_cli_form(&["vespasian", "--target-type", "summarisation"]);
+            for choice in choices {
+                form.key(key(choice));
+            }
+            crate::apply_guided(&mut cli, form.result());
+            assert_eq!(cli.target_type, expected);
+        }
+    }
+
+    #[test]
+    fn guided_cli_custom_category_is_visible_in_review() {
+        let (_, form) = guided_cli_form(&["vespasian", "--target-type", "summarisation"]);
+        for (width, height) in [(60, 18), (100, 32)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| render_review(frame, frame.area(), &form))
+                .unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert!(text.contains("Category"));
+            assert!(text.contains("summarisation"));
+        }
+    }
+
+    #[test]
+    fn guided_cli_standard_choices_survive_form_round_trip() {
+        for (model, editor, metric, target_type) in [
+            ("Gemma3-1B", "anthropic", "token_f1", "style"),
+            ("Qwen3-0.8B", "openai", "exact_match", "format"),
+            ("Gemma3-1B", "claude", "semantic", "classification"),
+            ("Qwen3-0.8B", "codex", "auto", "factual"),
+            ("Gemma3-1B", "anthropic", "exact_match", "custom"),
+        ] {
+            let cli = guided_cli_round_trip(&[
+                "vespasian",
+                "--model",
+                model,
+                "--editor",
+                editor,
+                "--metric",
+                metric,
+                "--target-type",
+                target_type,
+            ]);
+            assert_eq!(cli.model, model);
+            assert_eq!(cli.editor, editor);
+            assert_eq!(cli.metric, metric);
+            assert_eq!(cli.target_type, target_type);
+        }
+    }
+
+    #[test]
+    fn guided_cli_custom_models_survive_form_round_trip() {
+        for model in [
+            "owner/custom-checkpoint",
+            "Qwen/Qwen3.5-0.8B",
+            "Qwen3.5-0.8B",
+            "/tmp/local checkpoint",
+        ] {
+            let cli = guided_cli_round_trip(&["vespasian", "--model", model]);
+            assert_eq!(cli.model, model);
+        }
+    }
+
+    #[test]
+    fn guided_cli_provider_and_explicit_model_survive_form_round_trip() {
+        for (editor, editor_model) in [
+            ("anthropic", "claude-opus-5-5"),
+            ("claude", "chosen-claude-model"),
+            ("openai", "gpt-6-astra"),
+            ("codex", "chosen-codex-model"),
+        ] {
+            let cli = guided_cli_round_trip(&[
+                "vespasian",
+                "--editor",
+                editor,
+                "--editor-model",
+                editor_model,
+            ]);
+            assert_eq!(cli.editor, editor);
+            assert_eq!(cli.editor_model.as_deref(), Some(editor_model));
+        }
+    }
+
+    #[test]
+    fn guided_cli_provider_controls_the_default_editor_model() {
+        for (editor, editor_model) in [
+            ("anthropic", "claude-sonnet-5-5"),
+            ("claude", "claude-sonnet-5-5"),
+            ("openai", "gpt-6.1-sol"),
+            ("codex", "gpt-6.1-sol"),
+        ] {
+            let (mut cli, mut form) = guided_cli_form(&["vespasian", "--editor", editor]);
+            form.step = 6;
+            form.key(key(KeyCode::Enter));
+            assert_eq!(form.step, 7);
+            crate::apply_guided(&mut cli, form.result());
+            assert_eq!(cli.editor_model.as_deref(), Some(editor_model));
+            assert_eq!(cli.editor, editor);
+        }
     }
 
     #[test]

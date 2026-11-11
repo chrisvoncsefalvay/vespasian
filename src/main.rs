@@ -14,7 +14,7 @@ mod wizard;
 mod worker;
 
 use anyhow::{bail, Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{json, Value};
 use std::{
     fs::{self, File, OpenOptions},
@@ -401,38 +401,14 @@ async fn main() {
     }
 }
 async fn entry() -> Result<()> {
-    let mut cli = Cli::parse();
+    let matches = Cli::command().get_matches();
+    let mut cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
     if cli.command.is_none()
         && cli.dataset.is_none()
         && std::io::stdin().is_terminal()
         && std::io::stdout().is_terminal()
     {
-        let Some(selection) = wizard::wizard(wizard::WizardOptions {
-            python: python_path(&cli.python),
-            limit: cli.limit,
-            dataset_config: cli.dataset_config.clone(),
-            dataset_split: cli.dataset_split.clone(),
-            dataset_revision: cli.dataset_revision.clone(),
-            dataset_mode: cli.dataset_mode.clone(),
-            text_field: cli.text_field.clone(),
-            prompt_field: cli.prompt_field.clone(),
-            target_field: cli.target_field.clone(),
-            goal: cli.goal.clone(),
-            editor_model: cli.editor_model.clone(),
-            budget: cli.budget,
-            controls: cli.controls.clone(),
-            hf_token: cli.hf_token.clone(),
-            publish_repo: cli.publish_repo.clone(),
-            publish_visibility: cli.publish_visibility.clone(),
-            publish_create: cli.publish_create,
-            health_checks: cli.health_checks.clone(),
-            health_max_drop: cli.health_max_drop,
-            save_trajectory: cli.save_trajectory,
-            trajectory_repo: cli.trajectory_repo.clone(),
-            trajectory_visibility: cli.trajectory_visibility.clone(),
-            trajectory_create: cli.trajectory_create,
-        })?
-        else {
+        let Some(selection) = wizard::wizard(wizard::WizardOptions::from((&cli, &matches)))? else {
             return Ok(());
         };
         apply_guided(&mut cli, selection);
@@ -791,6 +767,42 @@ async fn entry() -> Result<()> {
         )
     }
     Ok(())
+}
+
+impl From<(&Cli, &clap::ArgMatches)> for wizard::WizardOptions {
+    fn from((cli, matches): (&Cli, &clap::ArgMatches)) -> Self {
+        Self {
+            python: python_path(&cli.python),
+            model: cli.model.clone(),
+            editor: cli.editor.clone(),
+            metric: cli.metric.clone(),
+            target_type: (matches.value_source("target_type")
+                == Some(clap::parser::ValueSource::CommandLine))
+            .then(|| cli.target_type.clone()),
+            limit: cli.limit,
+            dataset_config: cli.dataset_config.clone(),
+            dataset_split: cli.dataset_split.clone(),
+            dataset_revision: cli.dataset_revision.clone(),
+            dataset_mode: cli.dataset_mode.clone(),
+            text_field: cli.text_field.clone(),
+            prompt_field: cli.prompt_field.clone(),
+            target_field: cli.target_field.clone(),
+            goal: cli.goal.clone(),
+            editor_model: cli.editor_model.clone(),
+            budget: cli.budget,
+            controls: cli.controls.clone(),
+            hf_token: cli.hf_token.clone(),
+            publish_repo: cli.publish_repo.clone(),
+            publish_visibility: cli.publish_visibility.clone(),
+            publish_create: cli.publish_create,
+            health_checks: cli.health_checks.clone(),
+            health_max_drop: cli.health_max_drop,
+            save_trajectory: cli.save_trajectory,
+            trajectory_repo: cli.trajectory_repo.clone(),
+            trajectory_visibility: cli.trajectory_visibility.clone(),
+            trajectory_create: cli.trajectory_create,
+        }
+    }
 }
 
 fn apply_guided(cli: &mut Cli, selection: wizard::WizardResult) {
