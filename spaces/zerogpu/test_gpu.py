@@ -1,5 +1,6 @@
 """Real tiny-transformer checks; no Hub downloads, scheduler or frontier calls."""
 import copy
+import contextvars
 import json
 import os
 from pathlib import Path
@@ -325,6 +326,144 @@ class GPUStateTests(unittest.TestCase):
         self.assertTrue(resumed[-1]["ok"])
         self.assertEqual(attempted, [1])
         self.assertEqual(len(resumed[-1]["data"]["samples"]), 2)
+
+    def test_allocation_boundary_waits_for_the_resuming_request_context(self):
+        credential = contextvars.ContextVar("request_credential", default="initial-request")
+        observed = []
+
+        def scheduled(state_dir, request):
+            observed.append(credential.get())
+            yield {"type": "result", "id": request["id"], "ok": True, "data": {}}
+
+        with patch.object(gpu, "_gpu_dispatch", side_effect=scheduled):
+            iterator = gpu.dispatch(str(self.state), {"id": 301, "command": "init"}, boundaries=True)
+            self.assertEqual(next(iterator), {"type": "gpu_allocation"})
+            self.assertEqual(observed, [])
+            fresh_request = contextvars.copy_context()
+            fresh_request.run(credential.set, "fresh-request")
+            events = fresh_request.run(list, iterator)
+        self.assertEqual(observed, ["fresh-request"])
+        self.assertTrue(events[-1]["ok"])
+
+    def test_batches_resume_on_fresh_callback_threads_without_changing_results(self):
+        self.initialise()
+        request = {"id": 302, "command": "evaluate", "splits": ["validation", "preserve", "test"], "max_new_tokens": 3}
+        expected = self.fixture.evaluate(request)
+        credential = contextvars.ContextVar("batch_request_credential", default="initial-request")
+        original_dispatch = gpu._gpu_dispatch
+        allocations, events = [], []
+
+        def scheduled(state_dir, batch_request):
+            allocations.append((batch_request["_space_batch"]["offset"], credential.get()))
+            yield from original_dispatch(state_dir, batch_request)
+
+        def advance_request(number):
+            credential.set(f"request-{number}")
+            for event in iterator:
+                if event["type"] == "gpu_allocation":
+                    return False
+                events.append(event)
+            return True
+
+        with patch.object(gpu, "MAX_EXAMPLES", 1), patch.object(gpu, "_gpu_dispatch", side_effect=scheduled):
+            iterator = gpu.dispatch(str(self.state), request, boundaries=True)
+            self.assertEqual(next(iterator), {"type": "gpu_allocation"})
+            self.assertEqual(allocations, [])
+            with self.assertRaisesRegex(ValueError, "active operation"):
+                with gpu._state_lock(self.state / "evaluations"):
+                    pass
+            completed = []
+            for number in range(1, 4):
+                thread = threading.Thread(target=lambda n=number: completed.append(advance_request(n)))
+                thread.start()
+                thread.join(timeout=10)
+                self.assertFalse(thread.is_alive())
+        self.assertEqual(completed, [False, False, True])
+        self.assertEqual(allocations, [(0, "request-1"), (1, "request-2"), (2, "request-3")])
+        self.assertEqual(events[-1]["data"]["samples"], expected["samples"])
+        self.assertEqual(events[-1]["data"]["metrics"], expected["metrics"])
+        for journal in (self.state / "evaluations").glob("*.json"):
+            self.assertNotIn("gpu_allocation", journal.read_text())
+        with gpu._state_lock(self.state / "evaluations"):
+            pass
+
+    def test_expired_batch_retries_with_fresh_context_and_keeps_completed_batches(self):
+        import gradio as gr
+
+        self.initialise()
+        request = {"id": 303, "command": "evaluate", "splits": ["validation", "preserve"], "max_new_tokens": 3}
+        credential = contextvars.ContextVar("retry_request_credential", default="expired-request")
+        original_dispatch = gpu._gpu_dispatch
+        attempts, events = [], []
+
+        def scheduled(state_dir, batch_request):
+            offset = batch_request["_space_batch"]["offset"]
+            attempts.append((offset, credential.get()))
+            if offset == 1 and credential.get() == "expired-request":
+                raise gr.Error("Expired ZeroGPU proxy token")
+            yield from original_dispatch(state_dir, batch_request)
+
+        with patch.object(gpu, "MAX_EXAMPLES", 1), patch.object(gpu, "_gpu_dispatch", side_effect=scheduled):
+            iterator = gpu.dispatch(str(self.state), request, boundaries=True)
+            self.assertEqual(next(iterator), {"type": "gpu_allocation"})
+            for event in iterator:
+                if event["type"] == "gpu_allocation":
+                    break
+                events.append(event)
+            self.assertEqual(attempts, [(0, "expired-request")])
+            self.assertEqual(next(iterator), {"type": "gpu_allocation"})
+            self.assertEqual(attempts, [(0, "expired-request"), (1, "expired-request")])
+            fresh_request = contextvars.copy_context()
+            fresh_request.run(credential.set, "fresh-request")
+            events.extend(fresh_request.run(list, iterator))
+        self.assertEqual(attempts, [(0, "expired-request"), (1, "expired-request"), (1, "fresh-request")])
+        self.assertTrue(events[-1]["ok"])
+        self.assertEqual(len(events[-1]["data"]["samples"]), 2)
+        self.assertEqual(len([event for event in events if event["type"] == "answer"]), 2)
+
+    def test_proxy_retry_is_bounded_and_other_failures_are_not_retried(self):
+        cases = (
+            ("Expired ZeroGPU proxy token", True, False, 2),
+            ("Expired ZeroGPU proxy token", False, False, 1),
+            ("Expired ZeroGPU proxy token", True, True, 1),
+            ("GPU quota exceeded", True, False, 1),
+            ("Expired ZeroGPU proxy token: unrelated diagnostic", True, False, 1),
+        )
+        for message, boundaries, started, expected in cases:
+            with self.subTest(message=message, boundaries=boundaries, started=started):
+                attempts = []
+
+                def fail(state_dir, request):
+                    attempts.append(request["id"])
+                    if started:
+                        yield {"type": "progress", "message": "Model operation started"}
+                    raise RuntimeError(message)
+
+                with patch.object(gpu, "_gpu_dispatch", side_effect=fail):
+                    events = list(gpu.dispatch(str(self.state), {"id": 304, "command": "init"}, boundaries=boundaries))
+                self.assertEqual(len(attempts), expected)
+                self.assertEqual(sum(event["type"] == "gpu_allocation" for event in events), expected if boundaries else 0)
+                self.assertFalse(events[-1]["ok"])
+                self.assertEqual(events[-1]["error"], message)
+
+    def test_cpu_commands_have_no_allocation_boundary(self):
+        self.initialise()
+        self.call("edit", **proposal(self.fixture))
+        with patch.object(gpu, "_gpu_dispatch", side_effect=AssertionError("CPU command allocated a GPU")):
+            for number, command in enumerate(("rollback", "shutdown"), start=310):
+                events = list(gpu.dispatch(str(self.state), {"id": number, "command": command}, boundaries=True))
+                self.assertTrue(events[-1]["ok"], events[-1])
+                self.assertNotIn("gpu_allocation", {event["type"] for event in events})
+
+    def test_closing_at_an_allocation_boundary_releases_the_batch_lock(self):
+        self.initialise()
+        request = {"id": 320, "command": "evaluate", "splits": ["validation"], "max_new_tokens": 3}
+        with patch.object(gpu, "_gpu_dispatch", side_effect=AssertionError("Paused request allocated a GPU")):
+            iterator = gpu.dispatch(str(self.state), request, boundaries=True)
+            self.assertEqual(next(iterator), {"type": "gpu_allocation"})
+            iterator.close()
+        with gpu._state_lock(self.state / "evaluations"):
+            pass
 
     def test_events_arrive_before_operation_finishes(self):
         self.initialise()

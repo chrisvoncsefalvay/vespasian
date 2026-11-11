@@ -51,6 +51,9 @@ other Hub credentials. Editor keys stay within the session's controller process.
 The Space runs Qwen3.5-0.8B on ZeroGPU. Dataset access and frontier editing use CPU
 time. GPU allocations cover model loading, generation and tensor operations.
 Exact tensor snapshots carry the retained checkpoint between allocations.
+Each allocation starts from a fresh queued browser request, so Hugging Face
+renews GPU authorisation throughout a longer experiment. Keep the workbench open
+while the experiment runs.
 
 Saved checkpoints are loaded from disk in a fresh worker and checked against the
 retained rollouts. The run bundle contains measurements, checkpoint hashes,

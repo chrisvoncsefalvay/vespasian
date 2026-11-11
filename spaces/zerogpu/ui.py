@@ -670,6 +670,7 @@ def build_ui() -> tuple[gr.Blocks, dict[str, Any]]:
                 controls["dashboard_html"] = gr.HTML(render_dashboard(), elem_id="vs-dashboard-output")
         gr.HTML('<footer class="vs-page-footer"><span>VESPASIAN <span class="vs-footer-slash">/</span> THE WEIGHT SPACE EDITING ASSISTANT</span><a href="https://github.com/chrisvoncsefalvay/vespasian" target="_blank" rel="noopener noreferrer">Source code ↗</a></footer>')
         controls["state"] = gr.State({"events": [], "status": "idle", "config": {}})
+        controls["run_timer"] = gr.Timer(0.5, active=False)
 
         # Explicitly editable even before the caller attaches its run callbacks.
         for component in controls.values():

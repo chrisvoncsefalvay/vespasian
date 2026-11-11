@@ -24,6 +24,7 @@ RUNS: dict[str, "Run"] = {}
 LOCK = threading.Lock()
 MAX_ACTIVE = int(os.environ.get("VESPASIAN_SPACE_CONCURRENT_RUNS", "2"))
 RETENTION_SECONDS = 2 * 60 * 60
+CLIENT_TIMEOUT_SECONDS = 5 * 60
 PUBLIC_FIELDS = {"model", "goal", "controls", "budget", "max_turns", "metric", "target_type",
                  "dataset_mode", "editor", "editor_model", "health_checks", "health_count", "max_new_tokens"}
 
@@ -116,6 +117,14 @@ class Run:
         self.archive = None
         self.messages = queue.Queue()
         self.diagnostics = []
+        self.controller = None
+        self.advance_lock = threading.Lock()
+        self.launch_lock = threading.Lock()
+        self.state_lock = threading.RLock()
+        self.last_seen = time.monotonic()
+        self.pending_request = None
+        self.pending_dispatch = None
+        self.at_allocation_boundary = False
 
     def redact(self, value):
         if isinstance(value, str):
@@ -129,19 +138,21 @@ class Run:
         return value
 
     def state(self):
-        return {"run_id": self.id, "events": list(self.events), "status": self.status,
-                "config": self.config, "error": self.error,
-                "elapsed": time.monotonic() - self.started, "finished": self.finished}
+        with self.state_lock:
+            return {"run_id": self.id, "events": list(self.events), "status": self.status,
+                    "config": self.config, "error": self.error,
+                    "elapsed": time.monotonic() - self.started, "finished": self.finished}
 
     def event(self, value):
         value = self.redact(value)
-        self.events.append(value)
-        if value.get("type") == "phase":
-            self.status = value.get("message", "Running")
-        elif value.get("type") == "complete":
-            self.status = "Complete"
-        elif value.get("type") == "error":
-            self.error = value.get("message", "Run stopped")
+        with self.state_lock:
+            self.events.append(value)
+            if value.get("type") == "phase":
+                self.status = value.get("message", "Running")
+            elif value.get("type") == "complete":
+                self.status = "Complete"
+            elif value.get("type") == "error":
+                self.error = value.get("message", "Run stopped")
 
     def _read(self, stream, errors=False):
         for line in stream:
@@ -155,16 +166,20 @@ class Run:
                     self.diagnostics.append(self.redact(line.strip()))
 
     def drain(self):
-        while True:
-            try:
-                self.event(self.messages.get_nowait())
-            except queue.Empty:
-                break
+        with self.state_lock:
+            while True:
+                try:
+                    self.event(self.messages.get_nowait())
+                except queue.Empty:
+                    break
 
     def stop(self):
         self.cancelled.set()
         if self.process and self.process.poll() is None:
-            self.process.send_signal(signal.SIGINT)
+            try:
+                self.process.send_signal(signal.SIGINT)
+            except ProcessLookupError:
+                pass
 
     def bundle(self):
         if not self.output.is_dir():
@@ -179,13 +194,24 @@ class Run:
         self.archive = archive
         return archive
 
-    def execute(self, config, token, availability, dispatch):
+    def start(self, config, token, availability):
+        """Start CPU work without retaining a Gradio request or scheduling a GPU."""
+        with self.launch_lock:
+            if self.controller is not None:
+                raise ValueError("This experiment has already started")
+            self.controller = threading.Thread(
+                target=self._control, args=(dict(config), token, availability),
+                name=f"vespasian-{self.id[:10]}", daemon=True,
+            )
+            self.controller.start()
+
+    def _control(self, config, token, availability):
+        readers = []
         try:
             model = next((entry for entry in availability if entry["id"] == config["model"] and entry["available"]), None)
             if not model:
                 raise ValueError("Choose an available model")
             self.status = "Retrieving your dataset"
-            yield self.state()
             data = hub.prepare_data(config, self.root, token)
             if self.cancelled.is_set():
                 raise InterruptedError("Run stopped")
@@ -200,59 +226,133 @@ class Run:
                        threading.Thread(target=self._read, args=(self.process.stderr, True), daemon=True)]
             for reader in readers:
                 reader.start()
-            last_yield = 0
+            stopping_since = None
             while self.process.poll() is None:
                 self.drain()
-                request = self.bridge.next(timeout=0.1)
-                if request and not self.cancelled.is_set():
-                    self.status = "Waiting for ZeroGPU"
-                    yield self.state()
-                    try:
-                        for response in dispatch(str(request.state_dir), request.payload):
-                            if self.cancelled.is_set():
-                                break
-                            request.send(response)
-                            self.drain()
-                            if time.monotonic() - last_yield > 0.25:
-                                yield self.state()
-                                last_yield = time.monotonic()
-                    except Exception as error:
-                        request.send({"type": "result", "id": request.payload["id"], "ok": False,
-                                      "error": self.redact(str(error))})
-                if time.monotonic() - last_yield > 0.5:
-                    yield self.state()
-                    last_yield = time.monotonic()
-            for reader in readers:
-                reader.join(timeout=2)
-            self.drain()
-            if self.process.returncode and not self.error:
-                self.error = self.diagnostics[-1] if self.diagnostics else "The run stopped before completion"
-            self.status = "Stopped" if self.cancelled.is_set() else ("Complete" if not self.error else "Run stopped")
+                if not self.advance_lock.locked() and time.monotonic() - self.last_seen > CLIENT_TIMEOUT_SECONDS:
+                    self.error = "The run stopped after five minutes without a browser connection"
+                    self.stop()
+                if self.cancelled.is_set():
+                    stopping_since = stopping_since or time.monotonic()
+                    if time.monotonic() - stopping_since > 5:
+                        self._kill()
+                        break
+                time.sleep(0.05)
         except Exception as error:
             self.error = self.redact(str(error))
-            self.status = "Run stopped"
         finally:
             if self.process and self.process.poll() is None:
                 self.stop()
                 try:
                     self.process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    os.killpg(self.process.pid, signal.SIGKILL)
+                    self._kill()
                     self.process.wait(timeout=5)
-            if self.bridge:
-                self.bridge.close()
-            self.finished = True
-            self.finished_at = time.monotonic()
+            for reader in readers:
+                reader.join(timeout=2)
+            self.drain()
+            # An in-flight allocation must release its model state before cleanup.
+            with self.advance_lock:
+                self._clear_dispatch()
+                if self.bridge:
+                    self.bridge.close()
+                if self.process and self.process.returncode and not self.error and not self.cancelled.is_set():
+                    self.error = self.diagnostics[-1] if self.diagnostics else "The run stopped before completion"
+                try:
+                    self.bundle()
+                except OSError:
+                    self.error = "The run finished but its download could not be packaged"
+                finally:
+                    for name in ("engines", "home"):
+                        path = self.root / name
+                        if path.is_dir():
+                            shutil.rmtree(path)
+                    self.secrets = ()
+                    self.status = "Stopped" if self.cancelled.is_set() else ("Complete" if not self.error else "Run stopped")
+                    self.finished_at = time.monotonic()
+                    self.finished = True
+
+    def _kill(self):
+        try:
+            os.killpg(self.process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+    def _clear_dispatch(self):
+        iterator, self.pending_dispatch = self.pending_dispatch, None
+        self.pending_request = None
+        self.at_allocation_boundary = False
+        if iterator is not None:
             try:
-                self.bundle()
-            except OSError:
-                self.error = "The run finished but its download could not be packaged"
-            for name in ("engines", "home"):
-                path = self.root / name
-                if path.is_dir():
-                    shutil.rmtree(path)
-            self.secrets = ()
-        yield self.state()
+                iterator.close()
+            except Exception as error:
+                self.error = self.redact(str(error))
+
+    def advance(self, dispatch):
+        """Run at most one GPU allocation in the current browser request."""
+        self.last_seen = time.monotonic()
+        if not self.advance_lock.acquire(blocking=False):
+            yield self.state()
+            return
+        try:
+            self.drain()
+            if self.finished or self.cancelled.is_set() or self.bridge is None:
+                yield self.state()
+                return
+            if self.pending_request is None:
+                request = self.bridge.next(timeout=0)
+                if request is None:
+                    yield self.state()
+                    return
+                self.pending_request = request
+                self.pending_dispatch = iter(dispatch(str(request.state_dir), request.payload, boundaries=True))
+            request = self.pending_request
+            # A previous callback may already have consumed the next marker.
+            allocated = self.at_allocation_boundary
+            self.at_allocation_boundary = False
+            self.status = "Waiting for ZeroGPU"
+            yield self.state()
+            last_yield = time.monotonic()
+            try:
+                while not self.cancelled.is_set():
+                    response = next(self.pending_dispatch)
+                    if response.get("type") == "gpu_allocation":
+                        if allocated:
+                            self.at_allocation_boundary = True
+                            break
+                        allocated = True
+                        continue
+                    request.send(response)
+                    self.drain()
+                    if time.monotonic() - last_yield > 0.25:
+                        yield self.state()
+                        last_yield = time.monotonic()
+            except StopIteration:
+                self._clear_dispatch()
+            except Exception as error:
+                request.send({"type": "result", "id": request.payload["id"], "ok": False,
+                              "error": self.redact(str(error))})
+                self._clear_dispatch()
+            yield self.state()
+        except GeneratorExit:
+            self.stop()
+            self._clear_dispatch()
+            raise
+        finally:
+            self.last_seen = time.monotonic()
+            self.advance_lock.release()
+
+    def execute(self, config, token, availability, dispatch):
+        """Drive the same lifecycle locally. Browser clients use start/advance."""
+        self.start(config, token, availability)
+        try:
+            while not self.finished:
+                yield from self.advance(dispatch)
+                time.sleep(0.05)
+            yield self.state()
+        finally:
+            if not self.finished:
+                self.stop()
 
 
 def begin(owner, config, token=False):

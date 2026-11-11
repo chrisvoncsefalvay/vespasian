@@ -99,21 +99,35 @@ def create_app():
         except Exception as error:
             return (f'<p class="vs-preview-note">{html.escape(safe_error(error, token))}</p>', gr.skip(), gr.skip())
 
+    def display_run(run, state):
+        finished = state["finished"]
+        has_checkpoint = finished and (run.output / "report.json").is_file() and not state["error"]
+        has_trajectory = finished and (run.output / "trajectory.jsonl").is_file()
+        return (state, render_dashboard(state), state["error"] or state["status"],
+                gr.update(value=str(run.archive) if run.archive else None, visible=bool(run.archive)),
+                gr.update(interactive=finished), gr.update(interactive=not finished),
+                gr.update(interactive=has_checkpoint), gr.update(interactive=has_trajectory),
+                gr.update(active=not finished))
+
     def start(values, request: gr.Request, oauth_token: gr.OAuthToken | None):
         config = collect(values)
         token = hub.token_for(oauth_token, config.pop("hf_token", ""))
         try:
             run = runtime.begin(request.session_hash, config, token)
+            run.start(config, token, available)
         except Exception as error:
             raise gr.Error(safe_error(error, token, config.get("api_key"))) from None
-        for state in run.execute(config, token, available, dispatch):
-            finished = state["finished"]
-            has_checkpoint = finished and (run.output / "report.json").is_file() and not state["error"]
-            has_trajectory = finished and (run.output / "trajectory.jsonl").is_file()
-            yield (state, render_dashboard(state), state["error"] or state["status"],
-                   gr.update(value=str(run.archive) if run.archive else None, visible=bool(run.archive)),
-                   gr.update(interactive=finished), gr.update(interactive=not finished),
-                   gr.update(interactive=has_checkpoint), gr.update(interactive=has_trajectory))
+        return display_run(run, run.state())
+
+    def advance(state, request: gr.Request):
+        try:
+            run = runtime.get_run(request.session_hash, state)
+        except ValueError as error:
+            raise gr.Error(str(error)) from None
+        # Each timer event is a new queued request with fresh ZeroGPU headers.
+        # The runtime stops at an allocation boundary before this event ends.
+        for current in run.advance(dispatch):
+            yield display_run(run, current)
 
     def stop(state, request: gr.Request):
         run = runtime.get_run(request.session_hash, state)
@@ -150,9 +164,13 @@ def create_app():
             controls["test_preview_button"].click(inspect_test, inputs=preview_inputs,
                 outputs=[controls.get("test_preview_html", controls["preview_html"]), controls["test_dataset_config"], controls["test_dataset_split"]],
                 api_name="preview_test_dataset", concurrency_limit=4)
+        run_outputs = [controls[name] for name in ("state", "dashboard_html", "status", "download", "run_button", "stop_button", "publish_model_button", "publish_trajectory_button", "run_timer")]
         controls["run_button"].click(start, inputs={controls[name] for name in FIELDS},
-            outputs=[controls[name] for name in ("state", "dashboard_html", "status", "download", "run_button", "stop_button", "publish_model_button", "publish_trajectory_button")],
-            api_name="run", concurrency_limit=runtime.MAX_ACTIVE, concurrency_id="experiments")
+            outputs=run_outputs, api_name="run", concurrency_limit=runtime.MAX_ACTIVE)
+        controls["run_timer"].tick(advance, inputs=controls["state"], outputs=run_outputs,
+            api_name="advance", api_visibility="undocumented", queue=True,
+            trigger_mode="once", show_progress="hidden", concurrency_limit=runtime.MAX_ACTIVE,
+            concurrency_id="gpu-allocations")
         controls["stop_button"].click(stop, inputs=controls["state"], outputs=controls["status"], queue=False, api_name=False)
         for kind, callback in (("model", publish_model), ("trajectory", publish_trajectory)):
             controls[f"publish_{kind}_button"].click(callback,

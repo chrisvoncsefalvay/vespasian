@@ -52,6 +52,22 @@ Staging retains executable bits. Application startup restores them for
 `bin/vespasian` and `python_bridge.py` because Hub HTTP uploads may not retain Unix
 file modes.
 
+## Browser request lifecycle
+
+The `/run` event starts dataset preparation and the Rust controller on CPU.
+An active Gradio timer submits queued `/advance` events. Each event performs at
+most one GPU allocation, streams its progress and returns. Model snapshots, the
+controller process and evaluation journals persist between events.
+
+Queued events obtain fresh ZeroGPU proxy headers. Keep `queue=True` on the timer
+and retain the allocation markers between evaluation batches. A failed scheduling
+attempt with an expired proxy token can retry once in the next browser event.
+The per-run lock prevents overlapping events from advancing the same experiment.
+
+API clients use the same Gradio session to call `/run`, then `/advance` until the
+run finishes. Browser disconnects stop an idle experiment after five minutes.
+The controller never schedules GPU work from its background thread.
+
 ## Local staging and checks
 
 From a committed checkout with the Linux x86-64 Rust target installed:

@@ -441,6 +441,25 @@ def _gpu_dispatch(state_dir: str, request: dict):
     yield from _stream(state_dir, request)
 
 
+def _scheduled_dispatch(state_dir, request, *, boundaries):
+    """Let the caller obtain a fresh browser request before each allocation."""
+    for attempt in range(2 if boundaries else 1):
+        if boundaries:
+            yield {"type": "gpu_allocation"}
+        started = False
+        try:
+            for event in _gpu_dispatch(state_dir, request):
+                started = True
+                yield event
+            return
+        except Exception as error:
+            message = getattr(error, "message", str(error))
+            if not boundaries or attempt or started or message != "Expired ZeroGPU proxy token":
+                raise
+            # Scheduling failed before model execution. The next boundary gives
+            # the browser a chance to submit fresh credentials before retrying.
+
+
 def _write_journal(path, value):
     temporary = path.with_name("." + path.name + "-" + uuid.uuid4().hex)
     _write_json(temporary, value)
@@ -477,16 +496,16 @@ def _aggregate(parts):
     return result
 
 
-def _batched_dispatch(state_dir, request):
+def _batched_dispatch(state_dir, request, *, boundaries=False):
     directory = Path(state_dir)
     metadata, _ = _read_metadata(directory)
     _validate_bounds(request, metadata)
     if metadata is None:
-        yield from _gpu_dispatch(state_dir, request)
+        yield from _scheduled_dispatch(state_dir, request, boundaries=boundaries)
         return
     total = len(_selected_rows(request, metadata["engine"]))
     if not total:
-        yield from _gpu_dispatch(state_dir, request)
+        yield from _scheduled_dispatch(state_dir, request, boundaries=boundaries)
         return
     # Keep a retryable receipt outside the GPU boundary after each allocation.
     # Version binding prevents an old evaluation from observing newer edits.
@@ -507,8 +526,10 @@ def _batched_dispatch(state_dir, request):
                 continue
             batch_request = {**request, "id": f"{request.get('id')}:batch:{offset}", "_space_batch": {"offset": offset, "count": min(MAX_EXAMPLES, total - offset), "total": total, "model_version": metadata["model_version"]}}
             events, result = [], None
-            for event in _gpu_dispatch(state_dir, batch_request):
-                if event.get("type") == "result":
+            for event in _scheduled_dispatch(state_dir, batch_request, boundaries=boundaries):
+                if event.get("type") == "gpu_allocation":
+                    yield event
+                elif event.get("type") == "result":
                     result = event
                 else:
                     events.append(event)
@@ -525,16 +546,21 @@ def _batched_dispatch(state_dir, request):
         yield {"type": "result", "id": request.get("id"), "ok": True, "data": _aggregate(parts)}
 
 
-def dispatch(state_dir: str, request: dict):
-    """Stream the existing JSONL protocol; the final success follows state commit."""
+def dispatch(state_dir: str, request: dict, *, boundaries=False):
+    """Stream protocol events, optionally pausing before each GPU allocation.
+
+    With boundaries enabled, the caller must consume ``gpu_allocation`` markers
+    itself and resume at most one allocation in each fresh queued browser event.
+    Markers are never persisted in evaluation journals or worker receipts.
+    """
     try:
         if not isinstance(request, dict):
             raise ValueError("Worker requests must be objects")
         if request.get("command") in {"accept", "rollback", "shutdown"}:
             yield from _stream(state_dir, request)
         elif request.get("command") in {"evaluate", "health"}:
-            yield from _batched_dispatch(state_dir, request)
+            yield from _batched_dispatch(state_dir, request, boundaries=boundaries)
         else:
-            yield from _gpu_dispatch(state_dir, request)
+            yield from _scheduled_dispatch(state_dir, request, boundaries=boundaries)
     except Exception as error:
         yield {"type": "result", "id": request.get("id") if isinstance(request, dict) else None, "ok": False, "error": str(error)}
