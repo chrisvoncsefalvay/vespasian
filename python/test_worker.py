@@ -13,7 +13,7 @@ from unittest.mock import patch
 import torch
 from transformers import LlamaConfig, LlamaForCausalLM
 
-from worker import Engine, model_structure, normalise, token_f1
+from worker import Engine, load_model_components, model_structure, normalise, token_f1
 
 
 class CharacterTokenizer:
@@ -59,6 +59,55 @@ def proposal(instance, **changes):
 
 
 class WorkerTests(unittest.TestCase):
+    def test_component_loader_pins_revision_and_disables_remote_code(self):
+        from unittest.mock import MagicMock
+        tokenizer = CharacterTokenizer()
+        for architecture in ("qwen3_5", "gemma3_text"):
+            model = MagicMock()
+            model.to.return_value = model
+            processor = SimpleNamespace(tokenizer=tokenizer)
+            with self.subTest(architecture=architecture), \
+                 patch("transformers.AutoConfig.from_pretrained", return_value=SimpleNamespace(model_type=architecture)) as config_loader, \
+                 patch("transformers.AutoProcessor.from_pretrained", return_value=processor) as processor_loader, \
+                 patch("transformers.AutoTokenizer.from_pretrained", return_value=tokenizer) as tokenizer_loader, \
+                 patch("transformers.Qwen3_5ForConditionalGeneration.from_pretrained", return_value=model) as qwen_loader, \
+                 patch("transformers.Gemma3ForCausalLM.from_pretrained", return_value=model) as gemma_loader:
+                loaded, actual_tokenizer, actual_processor = load_model_components("test/model", revision="pinned", device="cpu", dtype=torch.float32)
+                self.assertIs(loaded, model)
+                self.assertIs(actual_tokenizer, tokenizer)
+                self.assertIs(actual_processor, processor if architecture == "qwen3_5" else None)
+                calls = [config_loader, processor_loader if architecture == "qwen3_5" else tokenizer_loader, qwen_loader if architecture == "qwen3_5" else gemma_loader]
+                for loader in calls:
+                    self.assertFalse(loader.call_args.kwargs["trust_remote_code"])
+                    self.assertEqual(loader.call_args.kwargs["revision"], "pinned")
+                self.assertEqual(calls[-1].call_args.kwargs["attn_implementation"], "eager")
+                model.requires_grad_.assert_called_with(False)
+
+    def test_injected_loader_preserves_initialisation_and_provenance(self):
+        from unittest.mock import Mock
+        fixture = engine()
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source"
+            fixture.model.save_pretrained(source)
+            fixture.tokenizer.save_pretrained(source)
+            dataset = Path(directory) / "dataset.jsonl"
+            dataset.write_text("\n".join(json.dumps(row) for row in fixture.dataset))
+            loader = Mock(return_value=(fixture.model, fixture.tokenizer, None))
+            events = []
+            instance = Engine(emit=events.append, model_loader=loader)
+            result = instance.initialise({"model": str(source), "dataset": str(dataset), "device": "cpu", "seed": 19})
+            loader.assert_called_once_with(str(source), revision=None, device="cpu", dtype=torch.float32)
+            self.assertEqual(result["counts"], {"edit": 1, "validation": 1, "preserve": 1, "test": 1})
+            self.assertEqual(result["source"]["files"], Engine.manifest(source))
+            self.assertEqual(result["source"]["path"], str(source.resolve()))
+            self.assertEqual(result["architecture"], "llama")
+            self.assertEqual(instance.seed, 19)
+            self.assertEqual(len(instance.encoded), len(fixture.dataset))
+            self.assertEqual(set(instance.editable), set(fixture.editable))
+            self.assertFalse(instance.model.training)
+            self.assertTrue(all(not parameter.requires_grad for parameter in instance.model.parameters()))
+            self.assertEqual(events[-1]["message"], "Model ready")
+
     def unpaired(self, mode):
         instance = engine()
         instance.dataset_mode = mode

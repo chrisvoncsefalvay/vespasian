@@ -63,9 +63,34 @@ def model_structure(config) -> dict[str, Any]:
     return {"architecture": architecture, "num_hidden_layers": layers}
 
 
+def load_model_components(identifier: str, *, revision, device: str, dtype):
+    """Load supported model components without changing run state or provenance."""
+    from transformers import AutoConfig, AutoProcessor, AutoTokenizer, Gemma3ForCausalLM, Qwen3_5ForConditionalGeneration
+
+    kwargs = {"trust_remote_code": False}
+    if revision:
+        kwargs["revision"] = revision
+    config = AutoConfig.from_pretrained(identifier, **kwargs)
+    processor = None
+    if config.model_type == "qwen3_5":
+        model_class = Qwen3_5ForConditionalGeneration
+        processor = AutoProcessor.from_pretrained(identifier, **kwargs)
+        tokenizer = processor.tokenizer
+    elif config.model_type == "gemma3_text":
+        model_class = Gemma3ForCausalLM
+        tokenizer = AutoTokenizer.from_pretrained(identifier, **kwargs)
+    else:
+        raise ValueError(f"Unsupported architecture: {config.model_type}. Choose Qwen3.5-0.8B or Gemma-3-1B.")
+    model = model_class.from_pretrained(identifier, dtype=dtype, attn_implementation="eager", **kwargs).to(device)
+    model.eval()
+    model.requires_grad_(False)
+    return model, tokenizer, processor
+
+
 class Engine:
-    def __init__(self, emit=None):
+    def __init__(self, emit=None, model_loader=None):
         self.emit = emit or (lambda event: None)
+        self.model_loader = model_loader or load_model_components
         self.model = None
         self.tokenizer = None
         self.processor = None
@@ -195,7 +220,6 @@ class Engine:
         if self.model is not None:
             raise ValueError("This worker already has a model loaded")
         import torch
-        from transformers import AutoConfig, AutoProcessor, AutoTokenizer, Gemma3ForCausalLM, Qwen3_5ForConditionalGeneration
 
         self.max_seq_length = bounded_int(request.get("max_seq_length", 512), "max_seq_length", 16, 16384)
         seed = bounded_int(request.get("seed", 42), "seed", 0, 2**32 - 1)
@@ -216,9 +240,6 @@ class Engine:
         if not isinstance(identifier, str) or not identifier.strip():
             raise ValueError("Model identifier must contain text")
         revision = request.get("revision")
-        kwargs = {"trust_remote_code": False}
-        if revision:
-            kwargs["revision"] = revision
         self.progress("loading", f"Loading {identifier}")
         if Path(identifier).is_dir():
             self.source_dir = Path(identifier).resolve()
@@ -229,19 +250,10 @@ class Engine:
             # Keep the snapshot path: resolving the file symlink would yield a blob hash.
             self.source_dir = config_path.parent
             resolved_revision = self.source_dir.name
-            kwargs["revision"] = resolved_revision
-        config = AutoConfig.from_pretrained(identifier, **kwargs)
-        if config.model_type == "qwen3_5":
-            model_class = Qwen3_5ForConditionalGeneration
-            self.processor = AutoProcessor.from_pretrained(identifier, **kwargs)
-            self.tokenizer = self.processor.tokenizer
-        elif config.model_type == "gemma3_text":
-            model_class = Gemma3ForCausalLM
-            self.tokenizer = AutoTokenizer.from_pretrained(identifier, **kwargs)
-        else:
-            raise ValueError(f"Unsupported architecture: {config.model_type}. Choose Qwen3.5-0.8B or Gemma-3-1B.")
         dtype = torch.bfloat16 if self.device == "cuda" and torch.cuda.is_bf16_supported() else torch.float32
-        self.model = model_class.from_pretrained(identifier, dtype=dtype, attn_implementation="eager", **kwargs).to(self.device)
+        self.model, self.tokenizer, self.processor = self.model_loader(
+            identifier, revision=resolved_revision, device=self.device, dtype=dtype,
+        )
         self.model.eval()
         self.model.requires_grad_(False)
         structure = model_structure(self.model.config)
