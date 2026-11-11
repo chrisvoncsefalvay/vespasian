@@ -251,11 +251,11 @@ class CargoPackagingTests(unittest.TestCase):
         result = subprocess.run(
             ["cargo", "package", "--list", "--allow-dirty", "--locked", "--offline"],
             cwd=package.ROOT,
-            check=True,
             capture_output=True,
             text=True,
             timeout=60,
         )
+        self.assertEqual(result.returncode, 0, result.stderr)
         names = result.stdout.splitlines()
         self.assertIn("python/worker.py", names)
         self.assertIn("src/main.rs", names)
