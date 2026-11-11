@@ -1,0 +1,169 @@
+name: ZeroGPU Space
+
+on:
+  push:
+    branches: [main, zerogpu-space]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Both branches deploy to one Space. Do not interrupt an upload or race a sync.
+concurrency:
+  group: zerogpu-space-deployment
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/zerogpu-space'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.sync.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: zerogpu-space
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Merge main into the Space branch
+        id: sync
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin main zerogpu-space
+          git merge --ff-only origin/zerogpu-space
+          if ! git merge --no-edit origin/main; then
+            git merge --abort || true
+            echo '::error::main conflicts with zerogpu-space. Resolve and push the merge on zerogpu-space, then rerun this workflow.'
+            exit 1
+          fi
+          if ! git push origin HEAD:refs/heads/zerogpu-space; then
+            echo '::error::Could not update zerogpu-space. Check branch protection or a concurrent push, then rerun; no force push was attempted.'
+            exit 1
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  # GITHUB_TOKEN pushes do not trigger another push workflow. Check the actual
+  # merged commit and continue deployment here, in the same workflow run.
+  checks:
+    needs: sync
+    uses: ./.github/workflows/check.yml
+    with:
+      ref: ${{ needs.sync.outputs.sha }}
+
+  cpu-runtime:
+    name: Space model-state and OAuth checks
+    needs: sync
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    env:
+      HF_HUB_OFFLINE: '1'
+      TRANSFORMERS_OFFLINE: '1'
+      VESPASIAN_SPACE_SKIP_MODEL_LOAD: '1'
+      GRADIO_ANALYTICS_ENABLED: 'False'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.sync.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: spaces/zerogpu/requirements.txt
+      - name: Install the CPU test runtime
+        run: |
+          python -m pip install 'torch==2.13.0' 'torchvision==0.28.0' --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r spaces/zerogpu/requirements.txt 'spaces==0.51.3' 'gradio==6.31.0'
+      - name: Exercise model state without Hub downloads or GPU allocation
+        run: python -m unittest discover -s spaces/zerogpu -p 'test_gpu.py' -v
+      - name: Build the Gradio app with real OAuth routes
+        env:
+          SYSTEM: spaces
+          SPACE_ID: ci/vespasian
+          OAUTH_CLIENT_ID: ci-client
+          OAUTH_CLIENT_SECRET: ci-placeholder-not-a-secret
+          OAUTH_SCOPES: openid profile read-repos gated-repos write-repos
+          OPENID_PROVIDER_URL: https://huggingface.co
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, "spaces/zerogpu")
+          import app
+          from fastapi.testclient import TestClient
+          from gradio.routes import App
+          web = App.create_app(app.demo)
+          paths = set(web.openapi()["paths"])
+          assert {"/login/huggingface", "/login/callback", "/logout"} <= paths
+          with TestClient(web) as client:
+              response = client.get("/config")
+              assert response.status_code == 200, response.text
+              assert response.json()["dependencies"]
+          print("Gradio configuration and OAuth routes built without model loading")
+          PY
+
+  deploy:
+    needs: [sync, checks, cpu-runtime]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    environment: hf-space
+    env:
+      HF_SPACE_ID: ${{ vars.HF_SPACE_ID || 'chrisvoncsefalvay/vespasian' }}
+      SOURCE_SHA: ${{ needs.sync.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.sync.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: '1.91.0'
+          targets: x86_64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: zerogpu-x86_64-unknown-linux-gnu
+      - name: Test Space packaging, authentication and process isolation
+        run: |
+          python -m unittest discover -s spaces/zerogpu -p 'test_package_space.py' -v
+          python -m unittest discover -s spaces/zerogpu -p 'test_hub.py' -v
+          python -m unittest discover -s spaces/zerogpu -p 'test_runtime.py' -v
+          python -m unittest discover -s spaces/zerogpu -p 'test_bridge.py' -v
+          python -m compileall -q spaces/zerogpu
+      - name: Build the controller from the synced checkout
+        run: cargo build --release --locked --target x86_64-unknown-linux-gnu
+      - name: Stage the Space bundle
+        run: |
+          target/x86_64-unknown-linux-gnu/release/vespasian --version
+          python spaces/zerogpu/package_space.py build
+          python spaces/zerogpu/package_space.py verify dist/zerogpu-space
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: zerogpu-space-${{ needs.sync.outputs.sha }}
+          path: dist/zerogpu-space/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Install the deployment client
+        run: python -m pip install 'huggingface_hub==0.36.2'
+      - name: Reject deployment if the source branch has moved
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          current_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/zerogpu-space" --jq .object.sha)
+          if [ "$current_sha" != "$SOURCE_SHA" ]; then
+            echo '::error::zerogpu-space changed during the build. The newer workflow run must deploy it.'
+            exit 1
+          fi
+      - name: Upload to the existing ZeroGPU Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: python spaces/zerogpu/package_space.py upload dist/zerogpu-space --repo-id "$HF_SPACE_ID"
