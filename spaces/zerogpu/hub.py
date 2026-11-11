@@ -5,13 +5,21 @@ from __future__ import annotations
 import hashlib
 import html
 import importlib.util
+import itertools
 import json
+import os
 from pathlib import Path
 import re
+import subprocess
+import sys
+import tempfile
 from typing import Any
 
 ROOT = Path(__file__).resolve().parent
 CORE = ROOT / "core" if (ROOT / "core").is_dir() else ROOT.parent.parent / "python"
+DATA_FIELDS = {"dataset_source", "dataset_config", "dataset_split", "dataset_mode", "prompt_field",
+               "target_field", "text_field", "example_limit", "test_dataset_source",
+               "test_dataset_config", "test_dataset_split", "test_example_limit"}
 
 
 def core_module(name):
@@ -31,14 +39,15 @@ def token_for(oauth_token=None, override=""):
     return (override or "").strip() or getattr(oauth_token, "token", None) or False
 
 
-def services(token=False):
+def services(token=False, cache_dir=None):
     import datasets
     from huggingface_hub import HfApi
+    download = datasets.DownloadConfig(cache_dir=cache_dir, token=token or False)
     return {
         "api": HfApi(token=token or False),
-        "loader": lambda *a, **kw: datasets.load_dataset(*a, **kw, token=token or False),
-        "config_names": lambda *a, **kw: datasets.get_dataset_config_names(*a, **kw, token=token or False),
-        "split_names": lambda *a, **kw: datasets.get_dataset_split_names(*a, **kw, token=token or False),
+        "loader": lambda *a, **kw: datasets.load_dataset(*a, **kw, token=token or False, cache_dir=cache_dir, download_config=download),
+        "config_names": lambda *a, **kw: datasets.get_dataset_config_names(*a, **kw, token=token or False, download_config=download),
+        "split_names": lambda *a, **kw: datasets.get_dataset_split_names(*a, **kw, token=token or False, cache_dir=cache_dir, download_config=download),
         "runtime_version": datasets.__version__,
     }
 
@@ -65,17 +74,18 @@ def account_datasets(token=False, api=None):
     return who["name"], sorted(choices, key=str.casefold)
 
 
-def preview(config, token=False):
-    return dataset.preview(
-        repo=repository(config.get("dataset_source", "")),
-        config=config.get("dataset_config") or None,
-        split=config.get("dataset_split") or "train",
-        dataset_mode=config.get("dataset_mode", "paired"),
-        prompt_field=config.get("prompt_field") or None,
-        target_field=config.get("target_field") or None,
-        text_field=config.get("text_field") or None,
-        preview_rows=3, **services(token),
-    )
+def _preview_local(config, token=False):
+    with tempfile.TemporaryDirectory(prefix="vs-preview-") as cache:
+        return dataset.preview(
+            repo=repository(config.get("dataset_source", "")),
+            config=config.get("dataset_config") or None,
+            split=config.get("dataset_split") or "train",
+            dataset_mode=config.get("dataset_mode", "paired"),
+            prompt_field=config.get("prompt_field") or None,
+            target_field=config.get("target_field") or None,
+            text_field=config.get("text_field") or None,
+            preview_rows=3, **services(token, cache),
+        )
 
 
 def _display(value):
@@ -107,22 +117,59 @@ def preview_html(result):
     return "".join(parts)
 
 
-def fetch_source(config, directory: Path, token=False, *, test=False):
+def _fetch_local(config, directory: Path, token=False, *, test=False):
     prefix = "test_" if test else ""
     name = "test" if test else "training"
-    runtime = services(token)
-    runtime.pop("split_names")
-    return dataset.fetch(
-        repo=repository(config.get(prefix + "dataset_source", "")),
-        config=config.get(prefix + "dataset_config") or None,
-        split=config.get(prefix + "dataset_split") or ("test" if test else "train"),
-        output=directory / f"{name}.jsonl", receipt=directory / f"{name}-source.json",
-        limit=int(config.get("test_example_limit" if test else "example_limit", 16)),
-        dataset_mode=config.get("dataset_mode", "paired"),
-        prompt_field=config.get("prompt_field") or None,
-        target_field=config.get("target_field") or None,
-        text_field=config.get("text_field") or None, **runtime,
-    )
+    with tempfile.TemporaryDirectory(prefix="vs-import-") as cache:
+        runtime = services(token, cache)
+        runtime.pop("split_names")
+        return dataset.fetch(
+            repo=repository(config.get(prefix + "dataset_source", "")),
+            config=config.get(prefix + "dataset_config") or None,
+            split=config.get(prefix + "dataset_split") or ("test" if test else "train"),
+            output=directory / f"{name}.jsonl", receipt=directory / f"{name}-source.json",
+            limit=int(config.get("test_example_limit" if test else "example_limit", 16)),
+            dataset_mode=config.get("dataset_mode", "paired"),
+            prompt_field=config.get("prompt_field") or None,
+            target_field=config.get("target_field") or None,
+            text_field=config.get("text_field") or None, **runtime,
+        )
+
+
+def _dataset_subprocess(kind, config, token=False, directory=None, test=False):
+    # datasets also caches Hub cards outside its data cache. A separate process
+    # sets every cache root before importing either library, without changing
+    # another visitor's environment or inheriting the Space owner's credentials.
+    with tempfile.TemporaryDirectory(prefix="vs-hub-") as cache:
+        allowed = {"PATH", "LANG", "LC_ALL", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE"}
+        env = {key: value for key, value in os.environ.items() if key in allowed}
+        env.update(HOME=cache, HF_HOME=cache, HF_HUB_CACHE=str(Path(cache) / "hub"),
+                   HF_DATASETS_CACHE=str(Path(cache) / "datasets"), HF_HUB_DISABLE_IMPLICIT_TOKEN="1",
+                   HF_HUB_DISABLE_PROGRESS_BARS="1", HF_HUB_DISABLE_TELEMETRY="1")
+        if token:
+            env["HF_TOKEN"] = token
+        payload = {"config": {key: value for key, value in config.items() if key in DATA_FIELDS},
+                   "directory": str(directory) if directory else None, "test": test}
+        try:
+            result = subprocess.run([sys.executable, str(Path(__file__).resolve()), "--dataset-operation", kind],
+                                    input=json.dumps(payload), env=env, capture_output=True, text=True, timeout=180)
+        except subprocess.TimeoutExpired:
+            raise ValueError("Dataset retrieval timed out. Reduce the example limit or try again") from None
+        try:
+            response = json.loads(result.stdout)
+        except ValueError:
+            raise ValueError("Dataset retrieval stopped. Check the repository and try again") from None
+        if result.returncode or not response.get("ok"):
+            raise ValueError(response.get("error", "Dataset retrieval stopped"))
+        return response["result"]
+
+
+def preview(config, token=False):
+    return _dataset_subprocess("preview", config, token)
+
+
+def fetch_source(config, directory: Path, token=False, *, test=False):
+    return _dataset_subprocess("fetch", config, token, directory, test)
 
 
 def read_upload(path: str, config) -> list[dict]:
@@ -133,7 +180,7 @@ def read_upload(path: str, config) -> list[dict]:
     limit = int(config.get("example_limit", 16))
     if suffix == ".jsonl":
         with source.open() as handle:
-            raw = [json.loads(line) for line in handle if line.strip()][:limit]
+            raw = [json.loads(line) for line in itertools.islice((line for line in handle if line.strip()), limit)]
     elif suffix == ".json":
         raw = json.loads(source.read_text())
         if isinstance(raw, dict):
@@ -215,3 +262,28 @@ def publish_run(run: Path, *, kind: str, repo: str, visibility: str, create: boo
     extra = {"delete_operation": CommitOperationDelete} if kind == "model" else {}
     return module.publish(run=run, repo=repo, visibility=visibility, create=create,
                           api=HfApi(token=token), operation=CommitOperationAdd, **extra)
+
+
+if __name__ == "__main__":
+    try:
+        if len(sys.argv) != 3 or sys.argv[1] != "--dataset-operation":
+            raise ValueError("Choose a dataset operation")
+        payload = json.load(sys.stdin)
+        token = os.environ.get("HF_TOKEN") or False
+        if sys.argv[2] == "preview":
+            result = _preview_local(payload["config"], token)
+        elif sys.argv[2] == "fetch":
+            result = _fetch_local(payload["config"], Path(payload["directory"]), token, test=payload["test"])
+        else:
+            raise ValueError("Unknown dataset operation")
+        response = {"ok": True, "result": result}
+    except Exception as error:
+        message = str(error)
+        if os.environ.get("HF_TOKEN"):
+            message = message.replace(os.environ["HF_TOKEN"], "[redacted]")
+        response = {"ok": False, "error": message[:1000]}
+    print(json.dumps(response, ensure_ascii=False), flush=True)
+    # All importer output files are closed. Avoid running native streaming-reader
+    # finalisers while their background threads are shutting down. The parent
+    # owns cache cleanup and the OS reclaims this short-lived reader process.
+    os._exit(0)

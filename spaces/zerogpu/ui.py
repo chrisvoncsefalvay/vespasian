@@ -30,14 +30,35 @@ in display state. All user-, dataset- and provider-supplied text is escaped.
 from __future__ import annotations
 
 import html
+import json
 import math
 import re
+import tomllib
 from pathlib import Path
 from typing import Any
 
 import gradio as gr
 
 
+def _release_version(directory: Path) -> str | None:
+    """Prefer the deployed bundle version, then the local Cargo package."""
+    for path, parse, keys in (
+        (directory / "PROVENANCE.json", json.loads, ("version",)),
+        (directory.parent.parent / "Cargo.toml", tomllib.loads, ("package", "version")),
+    ):
+        try:
+            value = parse(path.read_text(encoding="utf-8"))
+            for key in keys:
+                value = value[key]
+            if isinstance(value, str) and re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?", value):
+                return value
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return None
+
+
+RELEASE_VERSION = _release_version(Path(__file__).resolve().parent)
+RELEASE_LABEL = f"v{RELEASE_VERSION}" if RELEASE_VERSION else "Version unavailable"
 ASSET_DIR = Path(__file__).resolve().parent / "assets"
 CSS = (ASSET_DIR / "workbench.css").read_text(encoding="utf-8").replace(
     "__ASSETS__", f"/gradio_api/file={ASSET_DIR.as_posix()}"
@@ -91,10 +112,10 @@ _MARK = '<svg viewBox="0 0 30 30" aria-hidden="true"><path d="M3 7 15 24 27 7M9 
 HEADER = f"""<header class="vs-masthead">
   <a class="vs-wordmark" href="https://github.com/chrisvoncsefalvay/vespasian" target="_blank" rel="noopener noreferrer">{_MARK}<span>VESPASIAN</span></a>
   <span class="vs-masthead-rule"></span>
-  <span class="vs-masthead-meta">WEIGHT SPACE EDITING ASSISTANT<span>/</span>v0.1.5<span>/</span>ZEROGPU</span>
+  <span class="vs-masthead-meta">WEIGHT SPACE EDITING ASSISTANT<span>/</span>{RELEASE_LABEL}<span>/</span>ZEROGPU</span>
   <a class="vs-docs" href="https://github.com/chrisvoncsefalvay/vespasian#readme" target="_blank" rel="noopener noreferrer">Documentation <span aria-hidden="true">↗</span></a>
 </header>
-<div class="vs-intro"><div><span class="vs-kicker">THE WORKBENCH</span><h1>A measured change.</h1></div><p>Describe the behaviour. Follow the edits.<br>Keep what improves.</p></div>"""
+<div class="vs-intro"><div><span class="vs-kicker">The Weight Space Editing Assistant</span><h1>Vespasian</h1></div><p>Configure a model-editing experiment<br>and inspect its measured results.</p></div>"""
 
 PREVIEW_EMPTY = """<div class="vs-preview-empty"><span class="vs-kicker">DATASET PREVIEW</span><p>Connect a dataset to inspect its fields and examples before starting.</p></div>"""
 
@@ -162,7 +183,7 @@ def _replay(state: dict) -> dict:
         "model": config.get("model", ""), "goal": config.get("goal", ""),
         "budget_usd": config.get("budget", config.get("budget_usd")),
         "max_turns": _int(config.get("max_turns")), "metric": str(config.get("metric") or "auto"),
-        "phase": "Ready when you are", "message": "Configure an experiment to begin.",
+        "phase": "Not started", "message": "Configure an experiment to begin.",
         "baseline": {}, "best": {}, "health_baseline": {}, "health_best": {},
         "turns": [], "changes": {}, "answers": [], "editor_calls": {},
         "retained_turn": 0, "structure": {}, "tensor": {}, "assessment": "", "plan": "",
@@ -271,12 +292,27 @@ def _replay(state: dict) -> dict:
             view["phase"] = "Run interrupted"
             view["message"] = event.get("message", "")
     if state.get("status"):
-        view["status"] = state["status"]
+        status = str(state["status"]).strip().lower()
+        if status in {"complete", "completed"}:
+            view["status"] = "complete"
+        elif status in {"stopped", "cancelled"}:
+            view["status"] = "stopped"
+        elif status == "run stopped":
+            view["status"] = "error" if state.get("error") else "stopped"
+        elif status == "waiting for zerogpu":
+            view["status"] = "queued"
+        else:
+            view["status"] = status if status in {"idle", "running", "error", "stopping", "queued"} else "running"
     if state.get("message"):
         view["message"] = state["message"]
     if state.get("error"):
-        view["status"] = "error"
+        if view["status"] != "stopped":
+            view["status"] = "error"
         view["message"] = state["error"]
+    if view["status"] == "error":
+        view["phase"] = "Run interrupted"
+    elif view["status"] == "complete":
+        view["phase"] = "Experiment complete"
     if view["status"] in ("stopped", "cancelled", "stopping"):
         view["phase"] = "Stopping at the next boundary" if view["status"] == "stopping" else "Experiment stopped"
     view["turns"].sort(key=lambda row: _int(row.get("turn")))
@@ -288,7 +324,7 @@ def _curve(baseline: float | None, turns: list, get_value, *, label: str, metric
     if baseline is None:
         if compact:
             return '<div class="vs-health-pending">Awaiting baseline measurement.</div>'
-        return """<div class="vs-chart-empty"><div class="vs-empty-axis" aria-hidden="true"><span></span><span></span><span></span><i></i></div><div class="vs-chart-empty-copy"><span class="vs-empty-cross" aria-hidden="true">＋</span><h3>The baseline comes first.</h3><p>Your first measurement starts the chart.<br>Each candidate will leave a trace.</p></div><span class="vs-axis-label">EDIT TURN →</span></div>"""
+        return """<div class="vs-chart-empty"><div class="vs-empty-axis" aria-hidden="true"><span></span><span></span><span></span><i></i></div><div class="vs-chart-empty-copy"><span class="vs-empty-cross" aria-hidden="true">＋</span><h3>No measurements yet</h3><p>The chart will show the baseline<br>and each evaluated candidate after the run starts.</p></div><span class="vs-axis-label">EDIT TURN →</span></div>"""
     measurements = [(0, baseline, True)]
     for turn in turns:
         value = get_value(turn)
@@ -366,7 +402,7 @@ def _answers(view: dict) -> str:
     answers = view["answers"]
     heading = f'<div class="vs-section-heading"><h3>Generated answers</h3><span class="vs-kicker">{len(answers):02d} OBSERVED</span></div>'
     if not answers:
-        return f'<section class="vs-observations">{heading}<div class="vs-detail-empty"><span class="vs-quote-mark" aria-hidden="true">“</span><p>Read what the model actually says.<br>Answers appear as examples finish.</p></div></section>'
+        return f'<section class="vs-observations">{heading}<div class="vs-detail-empty"><p>Generated answers will appear here as evaluation examples finish.</p></div></section>'
     entries = []
     for index, answer in reversed(list(enumerate(answers[-20:]))):
         example = answer["example"]
@@ -445,13 +481,13 @@ def _editor(view: dict) -> str:
             body += f'<p>{_text(view["plan"])}</p>'
         body += '</details>'
     if not body:
-        body = '<div class="vs-detail-empty"><span class="vs-editor-mark" aria-hidden="true">↳</span><p>The editor’s proposal rationale and available summaries will appear here.</p></div>'
-    return f'<section class="vs-editor"><div class="vs-section-heading"><h3>Editor’s notebook</h3><span class="vs-kicker">PROPOSE → MEASURE</span></div><div class="vs-editor-body">{body}</div></section>'
+        body = '<div class="vs-detail-empty"><p>The editor’s proposal rationale and available summaries will appear here.</p></div>'
+    return f'<section class="vs-editor"><div class="vs-section-heading"><h3>Editor activity</h3><span class="vs-kicker">LATEST PROPOSAL</span></div><div class="vs-editor-body">{body}</div></section>'
 
 
 def _genealogy(view: dict) -> str:
     changes = sorted(view["changes"].values(), key=lambda row: _int(row.get("turn")))
-    heading = '<div class="vs-section-heading"><h3>Edit genealogy</h3><span class="vs-kicker">EVERY CANDIDATE HAS A PARENT</span></div>'
+    heading = '<div class="vs-section-heading"><h3>Edit genealogy</h3><span class="vs-kicker">CANDIDATE ANCESTRY</span></div>'
     if not changes and not view["has_baseline"]:
         return f'<section class="vs-genealogy">{heading}<p class="vs-empty-line">Retained and reverted branches appear as candidates are evaluated.</p></section>'
     width = max(520, 70 + len(changes) * 90)
@@ -522,10 +558,10 @@ def render_dashboard(state: dict | None = None) -> str:
         best_health = _health_score(view["health_best"].get(check_id))
         curve = _curve(baseline_health, view["turns"], lambda turn, key=check_id: _health_score(_dict(turn.get("health")).get(key)), label=f"{label}: retained health score by turn", compact=True)
         health += f'<section class="vs-health-chart"><div><h4>{_text(label)}</h4><span>{_fmt(best_health)}</span></div>{curve}<p>Baseline {_fmt(baseline_health)} <span>· retained {_fmt(best_health)}</span></p></section>'
-    health_section = f'<section class="vs-health"><div class="vs-section-heading"><h3>Preservation checks</h3><span class="vs-kicker">SAME BASELINE, EVERY TURN</span></div><div class="vs-health-grid">{health}</div></section>' if health else ""
+    health_section = f'<section class="vs-health"><div class="vs-section-heading"><h3>Preservation checks</h3><span class="vs-kicker">BASELINE COMPARISON</span></div><div class="vs-health-grid">{health}</div></section>' if health else ""
     model = str(view["model"]).split("/")[-1] if view["model"] else "No model loaded"
     return f"""<main class="vs-dashboard" aria-label="Experiment dashboard">
-      <div class="vs-run-heading"><div><span class="vs-kicker">EXPERIMENT MONITOR</span><h2>The hill climb<span class="vs-title-period">.</span></h2></div><div class="vs-run-state vs-state-{status_class}"><span><i aria-hidden="true"></i>{_text(display_status)}</span><small>{_text(model)}</small></div></div>
+      <div class="vs-run-heading"><div><span class="vs-kicker">EXPERIMENT MONITOR</span><h2>Hill climb</h2></div><div class="vs-run-state vs-state-{status_class}"><span><i aria-hidden="true"></i>{_text(display_status)}</span><small>{_text(model)}</small></div></div>
       {goal}
       <div class="vs-phase-line"><span>{_text(str(view["phase"]).replace("_", " "))}</span>{progress}</div>{message}
       <section class="vs-objective"><div class="vs-chart-heading"><div><span class="vs-kicker">VALIDATION OBJECTIVE</span><h3>{_text(_metric_name(metric))} <span>{"↓" if metric == "loss" else "↑"}</span></h3></div><div class="vs-score-comparison"><div><span>BASELINE</span><strong>{_fmt(before, metric)}</strong></div><b aria-hidden="true">→</b><div><span>RETAINED</span><strong>{_fmt(after, metric)}</strong></div>{delta}</div></div>{chart}<div class="vs-chart-footer"><div class="vs-legend"><span><i class="vs-line-swatch"></i>Retained path</span><span><i class="vs-dot-swatch"></i>Reverted trial</span><span><i class="vs-line-swatch vs-baseline-swatch"></i>Baseline</span></div><span class="vs-kicker">EDIT TURN</span></div>{measurements}</section>
@@ -533,7 +569,7 @@ def render_dashboard(state: dict | None = None) -> str:
       {health_section}{_layers(view)}
       <div class="vs-observation-grid">{_answers(view)}{_editor(view)}</div>
       {_genealogy(view)}
-      <div class="vs-dashboard-footnote"><span>PROPOSE · MEASURE · RETAIN</span><span>All plotted points come from this run.</span></div>
+      <div class="vs-dashboard-footnote"><span>EXPERIMENT RECORD</span><span>All plotted points come from this run.</span></div>
     </main>"""
 
 
@@ -552,12 +588,12 @@ def build_ui() -> tuple[gr.Blocks, dict[str, Any]]:
             with gr.Column(scale=3, min_width=310, elem_id="vs-setup"):
                 gr.HTML('<div class="vs-setup-title"><span class="vs-kicker">EXPERIMENT SETUP</span><span class="vs-setup-index">01—03</span></div>')
                 with gr.Column(elem_id="vs-account"):
-                    gr.HTML('<div class="vs-account-heading"><span class="vs-kicker">YOUR HUGGING FACE ACCOUNT</span><span>Connect once.</span></div>')
+                    gr.HTML('<div class="vs-account-heading"><span class="vs-kicker">YOUR HUGGING FACE ACCOUNT</span></div>')
                     controls["login_button"] = gr.LoginButton("Sign in with Hugging Face", elem_id="vs-login")
                     controls["profile_html"] = gr.HTML('<div class="vs-profile"><p>Use your datasets and save edited models to your Hub account.</p></div>', elem_id="vs-profile")
                 with gr.Tabs(elem_id="vs-setup-tabs", selected="target") as setup_tabs:
                     with gr.Tab("01  Data", id="target"):
-                        gr.HTML('<div class="vs-step-intro"><h2>Choose your material.</h2><p>Start with a model and the examples that define its new behaviour.</p></div>')
+                        gr.HTML('<div class="vs-step-intro"><h2>Dataset and model</h2><p>Select a base model and the dataset to use for editing and validation.</p></div>')
                         controls["model"] = gr.Dropdown(
                             choices=[("Qwen 3.5 · 0.8B", "Qwen/Qwen3.5-0.8B"), ("Gemma 3 · 1B", "google/gemma-3-1b-it")],
                             value="Qwen/Qwen3.5-0.8B", label="Base model", elem_id="vs-model",
@@ -587,11 +623,11 @@ def build_ui() -> tuple[gr.Blocks, dict[str, Any]]:
                             controls["test_preview_button"] = gr.Button("Inspect test dataset  ↗", variant="secondary")
                         controls["preview_button"] = gr.Button("Inspect dataset  ↗", variant="secondary", elem_id="vs-preview-button")
                         controls["preview_html"] = gr.HTML(PREVIEW_EMPTY, elem_id="vs-preview")
-                        next_behaviour = gr.Button("Next · define the behaviour  →", elem_classes=["vs-step-next"])
+                        next_behaviour = gr.Button("Continue to objective  →", elem_classes=["vs-step-next"])
                     with gr.Tab("02  Behaviour", id="behaviour"):
-                        gr.HTML('<div class="vs-step-intro"><h2>Make the change precise.</h2><p>Describe what should improve and what the model should preserve.</p></div>')
+                        gr.HTML('<div class="vs-step-intro"><h2>Objective and preservation</h2><p>Define the editing objective and choose any behaviours or capabilities to preserve.</p></div>')
                         controls["target_type"] = gr.Dropdown(choices=[("Factual knowledge", "factual"), ("Writing style", "style"), ("Output format", "format"), ("Classification", "classification"), ("Custom behaviour", "custom")], value="factual", label="Type of change")
-                        controls["goal"] = gr.Textbox(label="Editing objective", placeholder="Answer each prompt using the reference answer in target.", lines=5, elem_id="vs-goal")
+                        controls["goal"] = gr.Textbox(label="Editing objective", placeholder="Return answers that agree with the references in the dataset.", lines=5, elem_id="vs-goal")
                         controls["controls"] = gr.Textbox(label="Behaviour to preserve", placeholder="One requirement per line, e.g. answer in the same language as the question.", lines=3, info="Optional. These are checked alongside the objective.")
                         controls["health_checks"] = gr.Dropdown(choices=[("Copying", "copying"), ("Arithmetic", "arithmetic"), ("JSON formatting", "json"), ("MMLU · anatomy", "mmlu:anatomy"), ("MMLU · high school mathematics", "mmlu:high_school_mathematics")], value=["copying"], multiselect=True, allow_custom_value=True, label="Preservation checks", info="Optional. Add another MMLU subject as mmlu:subject.", elem_id="vs-health-checks")
                         with gr.Accordion("Evaluation settings", open=False):
@@ -599,9 +635,9 @@ def build_ui() -> tuple[gr.Blocks, dict[str, Any]]:
                             controls["max_new_tokens"] = gr.Slider(16, 128, value=64, step=16, label="Maximum generated tokens")
                             controls["health_count"] = gr.Slider(1, 16, value=4, step=1, label="Examples per preservation check")
                             controls["health_max_drop"] = gr.Number(value=None, minimum=0, maximum=1, step=0.01, label="Maximum health score drop · optional", info="Blank tracks scores without rejecting edits. 0.10 sets a 10 percentage point limit.")
-                        next_editor = gr.Button("Next · connect the editor  →", elem_classes=["vs-step-next"])
+                        next_editor = gr.Button("Continue to editor  →", elem_classes=["vs-step-next"])
                     with gr.Tab("03  Run", id="run"):
-                        gr.HTML('<div class="vs-step-intro"><h2>Set the boundaries.</h2><p>Your frontier editor proposes each change. The run measures whether to keep it.</p></div>')
+                        gr.HTML('<div class="vs-step-intro"><h2>Editor and budget</h2><p>Connect an editor API account and set the spending and iteration limits.</p></div>')
                         controls["editor"] = gr.Radio(choices=[("OpenAI", "openai"), ("Anthropic", "anthropic")], value="openai", label="Editor provider")
                         controls["editor_model"] = gr.Textbox(value="gpt-6.1-sol", label="Editor model", info="Use a model available to your API account.")
                         controls["api_key"] = gr.Textbox(type="password", label="Editor API key", placeholder="Your provider’s API key", elem_id="vs-api-key")
@@ -659,7 +695,7 @@ def build_ui() -> tuple[gr.Blocks, dict[str, Any]]:
             elif target_type == "custom":
                 hint = f"Use the examples in {field} to describe the specific change you want."
             else:
-                hint = f"Answer each prompt using the reference answer in {field}."
+                hint = f"Return answers that agree with the references in the “{field}” field."
             return gr.update(placeholder=hint)
 
         for component in ("target_type", "dataset_mode", "target_field", "text_field"):

@@ -89,6 +89,10 @@ class GPUStateTests(unittest.TestCase):
 
     @unittest.skipUnless(torch.cuda.is_available() and torch.cuda.is_bf16_supported(), "CUDA BF16 is unavailable")
     def test_cuda_bfloat16_replacements_and_rollback_are_bit_exact(self):
+        template = gpu.ModelTemplate(gpu.SUPPORTED_MODELS[0], self.revision, copy.deepcopy(self.fixture.model).to(dtype=torch.bfloat16), self.fixture.tokenizer)
+        registry = patch.object(gpu, "MODEL_TEMPLATES", MappingProxyType({template.identifier: template}))
+        registry.start()
+        self.addCleanup(registry.stop)
         self.call("init", model=gpu.SUPPORTED_MODELS[0], revision=self.revision, dataset=str(self.dataset), device="cuda", max_seq_length=128)
         self.call("edit", **proposal(self.fixture, operation="scale", strength=0.01))
         name = next(iter(self.fixture.editable))
@@ -104,6 +108,47 @@ class GPUStateTests(unittest.TestCase):
         self.call("rollback")
         self.assertTrue(torch.equal(gpu._read_snapshot(self.state)[1]["current." + name], retained))
         self.assert_template_unchanged()
+
+    def test_qwen_template_copy_preserves_canonical_mixed_precision_buffers(self):
+        from transformers import Qwen3_5Config, Qwen3_5ForConditionalGeneration, Qwen3_5TextConfig, Qwen3_5VisionConfig
+        from worker import load_model_components
+        text = Qwen3_5TextConfig(vocab_size=100, hidden_size=32, intermediate_size=64, num_hidden_layers=2,
+            num_attention_heads=2, num_key_value_heads=2, head_dim=16, layer_types=["full_attention"] * 2,
+            max_position_embeddings=128, bos_token_id=1, eos_token_id=2, pad_token_id=0,
+            rope_parameters={"rope_type": "default", "rope_theta": 10000.0, "partial_rotary_factor": 0.5, "mrope_section": [1, 1, 2]})
+        vision = Qwen3_5VisionConfig(depth=1, hidden_size=32, intermediate_size=64, num_heads=2,
+            out_hidden_size=32, num_position_embeddings=16, patch_size=2, spatial_merge_size=2, temporal_patch_size=1)
+        config = Qwen3_5Config(text_config=text, vision_config=vision, image_token_id=96,
+            video_token_id=97, vision_start_token_id=98, vision_end_token_id=99)
+        source = self.root / "tiny-qwen"
+        Qwen3_5ForConditionalGeneration(config).save_pretrained(source)
+        processor = SimpleNamespace(tokenizer=CharacterTokenizer())
+        with patch("transformers.AutoProcessor.from_pretrained", return_value=processor):
+            canonical, tokenizer, loaded_processor = load_model_components(str(source), revision=None, device="cpu", dtype=torch.bfloat16)
+            template = gpu.ModelTemplate(gpu.SUPPORTED_MODELS[0], self.revision, canonical, tokenizer, loaded_processor)
+            with patch.object(gpu, "MODEL_TEMPLATES", MappingProxyType({template.identifier: template})):
+                copied, _, _ = gpu._model_loader(template.identifier, revision=self.revision, device="cpu", dtype=torch.bfloat16)
+                canonical_buffers, copied_buffers = dict(canonical.named_buffers()), dict(copied.named_buffers())
+                self.assertEqual(canonical.dtype, torch.bfloat16)
+                self.assertTrue(any(value.dtype == torch.float32 and "inv_freq" in name for name, value in canonical_buffers.items()))
+                self.assertEqual(set(copied_buffers), set(canonical_buffers))
+                for name, value in canonical_buffers.items():
+                    self.assertEqual(copied_buffers[name].dtype, value.dtype, name)
+                    self.assertTrue(torch.equal(copied_buffers[name], value), name)
+                inputs = torch.tensor([[1, 3, 5, 7, 9]])
+                with torch.inference_mode():
+                    expected = canonical(input_ids=inputs, use_cache=False).logits
+                    actual = copied(input_ids=inputs, use_cache=False).logits
+                self.assertTrue(torch.equal(expected, actual))
+
+                def canonical_float32(identifier, *, revision, device, dtype):
+                    return load_model_components(str(source), revision=None, device=device, dtype=dtype)
+
+                with patch.object(gpu, "load_model_components", side_effect=canonical_float32) as loader:
+                    float32, _, _ = gpu._model_loader(template.identifier, revision=self.revision, device="cpu", dtype=torch.float32)
+                loader.assert_called_once_with(template.identifier, revision=self.revision, device="cpu", dtype=torch.float32)
+                self.assertEqual(float32.dtype, torch.float32)
+                self.assertEqual(canonical.dtype, torch.bfloat16)
 
     def test_startup_pins_resolved_revision_and_rejects_all_model_failure(self):
         with patch.dict(os.environ, {"VESPASIAN_SPACE_SKIP_MODEL_LOAD": "0", "VESPASIAN_SPACE_MODELS": gpu.SUPPORTED_MODELS[0]}), \

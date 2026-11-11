@@ -28,7 +28,7 @@ each candidate and keeps the changes that improve the objective.
 The workbench shows the objective curve, health checks, generated answers, editor
 summaries, edited layers and the ancestry of every retained checkpoint.
 
-## Your Hub, connected
+## Using your Hugging Face account
 
 1. **Sign in with Hugging Face.** Your datasets and organisation repositories
    appear in the dataset picker. Paste any accessible repository ID to open it.

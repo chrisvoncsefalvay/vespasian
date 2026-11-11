@@ -24,6 +24,7 @@ class HubTests(unittest.TestCase):
         self.client = Mock(return_value=self.api)
         self.datasets = SimpleNamespace(
             __version__="test",
+            DownloadConfig=Mock(side_effect=lambda **kwargs: SimpleNamespace(**kwargs)),
             load_dataset=Mock(side_effect=lambda *args, **kwargs: iter(self.rows)),
             get_dataset_config_names=Mock(return_value=["default"]),
             get_dataset_split_names=Mock(return_value=["train", "test"]),
@@ -37,6 +38,28 @@ class HubTests(unittest.TestCase):
         })
         dependencies.start()
         self.addCleanup(dependencies.stop)
+        self.real_subprocess = hub._dataset_subprocess
+        isolated = patch.object(hub, "_dataset_subprocess", side_effect=lambda kind, config, token=False, directory=None, test=False:
+                                hub._preview_local(config, token) if kind == "preview" else hub._fetch_local(config, directory, token, test=test))
+        isolated.start()
+        self.addCleanup(isolated.stop)
+
+    def test_dataset_process_isolates_hub_metadata_and_credentials(self):
+        def run(command, **kwargs):
+            env = kwargs["env"]
+            self.assertNotIn("OPENAI_API_KEY", env)
+            self.assertNotIn("editor-secret", kwargs["input"])
+            self.assertNotIn("visitor", kwargs["input"])
+            self.assertEqual(env["HF_TOKEN"], "visitor")
+            self.assertEqual(env["HF_HUB_DISABLE_IMPLICIT_TOKEN"], "1")
+            self.assertTrue(Path(env["HF_HOME"]).is_dir())
+            self.assertTrue(Path(env["HF_HUB_CACHE"]).is_relative_to(env["HF_HOME"]))
+            self.assertTrue(Path(env["HF_DATASETS_CACHE"]).is_relative_to(env["HF_HOME"]))
+            self.cache = env["HF_HOME"]
+            return SimpleNamespace(returncode=0, stdout='{"ok":true,"result":{"rows":[]}}')
+        with patch.dict(os.environ, {"HF_TOKEN": "owner", "OPENAI_API_KEY": "owner-api"}), patch.object(hub.subprocess, "run", side_effect=run):
+            self.assertEqual(self.real_subprocess("preview", {"api_key": "editor-secret", "hf_token": "visitor"}, "visitor"), {"rows": []})
+        self.assertFalse(Path(self.cache).exists())
 
     def test_no_login_explicitly_disables_ambient_owner_token(self):
         with patch.dict(os.environ, {"HF_TOKEN": "hf_owner_secret"}):
@@ -67,6 +90,9 @@ class HubTests(unittest.TestCase):
         for call in (self.datasets.load_dataset, self.datasets.get_dataset_config_names, self.datasets.get_dataset_split_names):
             self.assertEqual(call.call_args.kwargs["token"], "hf_visitor")
             self.assertEqual(call.call_args.kwargs["revision"], self.revision)
+        cache = self.datasets.load_dataset.call_args.kwargs["cache_dir"]
+        self.assertTrue(Path(cache).name.startswith("vs-preview-"))
+        self.assertFalse(Path(cache).exists())
 
     def test_inaccessible_private_dataset_does_not_fall_back_or_leak_token(self):
         self.api.dataset_info.side_effect = RuntimeError("HTTP 401 hf_visitor")

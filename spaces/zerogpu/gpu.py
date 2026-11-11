@@ -26,7 +26,7 @@ import uuid
 import torch
 from safetensors.torch import load_file, save_file
 
-_ROOT = Path(__file__).resolve().parents[2]
+_ROOT = Path(__file__).resolve().parent.parent.parent
 for _worker_dir in (Path(__file__).parent / "core", Path(__file__).parent / "python", _ROOT / "python"):
     if (_worker_dir / "worker.py").is_file():
         sys.path.insert(0, str(_worker_dir))
@@ -111,8 +111,12 @@ def _model_loader(identifier, *, revision, device, dtype):
         raise ValueError(f"Model is unavailable in this Space: {identifier}")
     if revision != template.revision:
         raise ValueError("Model revision differs from the Space's pinned startup revision")
+    if template.model.dtype != dtype:
+        # Architecture loaders retain selected FP32 buffers and parameters.
+        # A blanket .to(dtype=...) would change their numerical behaviour.
+        return load_model_components(identifier, revision=revision, device=device, dtype=dtype)
     model, tokenizer, processor = copy.deepcopy((template.model, template.tokenizer, template.processor))
-    model.to(device=device, dtype=dtype)
+    model.to(device=device)
     model.eval().requires_grad_(False)
     return model, tokenizer, processor
 

@@ -115,4 +115,3 @@ class Bridge:
                 client.close()
         self.thread.join(timeout=1)
         self.path.unlink(missing_ok=True)
-

@@ -78,7 +78,7 @@ jobs:
           cache-dependency-path: spaces/zerogpu/requirements.txt
       - name: Install the CPU test runtime
         run: |
-          python -m pip install 'torch==2.13.0' --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'torch==2.13.0' 'torchvision==0.28.0' --index-url https://download.pytorch.org/whl/cpu
           python -m pip install -r spaces/zerogpu/requirements.txt 'spaces==0.51.3' 'gradio==6.31.0'
       - name: Exercise model state without Hub downloads or GPU allocation
         run: python -m unittest discover -s spaces/zerogpu -p 'test_gpu.py' -v
