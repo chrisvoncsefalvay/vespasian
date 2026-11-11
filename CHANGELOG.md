@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
+
+Local datasets now require an explicit Hugging Face task (`--task` or a guided choice). Existing scripts should supply it. The default frontier budget is $10 and the default turn cap is now unset.
 
 - Capability-checked causal model loading, explicit plain/chat prompting and operator-configured Space models; tested shortlist distinguished from generic compatibility.
 - Shared Hugging Face task metadata, suggestions, task-filtered dataset search and explicit choices for missing or ambiguous tags.
