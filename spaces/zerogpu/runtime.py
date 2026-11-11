@@ -51,11 +51,11 @@ def child_environment(root, bridge, *, token=False, api_key="", editor="openai")
 
 
 def validate(config):
-    if not str(config.get("goal", "")).strip():
+    if not str(config.get("goal") or "").strip():
         raise ValueError("Set an editing objective")
     if config.get("editor") not in {"openai", "anthropic"}:
         raise ValueError("Choose OpenAI or Anthropic as the editor")
-    if not str(config.get("api_key", "")).strip():
+    if not str(config.get("api_key") or "").strip():
         raise ValueError("Add an editor API key")
     if not 0.01 <= float(config.get("budget", 0)) <= 100:
         raise ValueError("Set an inference budget between $0.01 and $100")
@@ -80,7 +80,7 @@ def command(config, data, output, revision):
         path.chmod(0o755)
     args = [str(binary), str(data), "--json", "--no-tui", "--python", str(shim), "--device", "cuda",
             "--output", str(output), "--model", config["model"], "--revision", revision,
-            "--goal", config["goal"], "--controls", config.get("controls", ""),
+            "--goal", config["goal"], "--controls", config.get("controls") or "",
             "--target-type", config.get("target_type", "custom"),
             "--dataset-mode", config.get("dataset_mode", "paired"),
             "--metric", config.get("metric", "auto"),

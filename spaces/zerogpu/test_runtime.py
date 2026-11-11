@@ -95,6 +95,21 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(command[command.index("--revision") + 1], "a" * 40)
         self.assertNotIn("visitor-api-key", " ".join(command))
 
+    def test_untouched_optional_controls_produce_valid_process_arguments(self):
+        binary = self.root / "bin/vespasian"
+        binary.parent.mkdir()
+        binary.write_text("binary fixture")
+        (self.root / "python_bridge.py").write_text("launcher fixture")
+        with patch.object(runtime, "ROOT", self.root), patch.dict(os.environ, {}, clear=True):
+            args = runtime.command({**self.config, "controls": None}, self.root / "input.jsonl", self.root / "output", "a" * 40)
+        self.assertEqual(args[args.index("--controls") + 1], "")
+        self.assertTrue(all(isinstance(value, str) for value in args))
+
+    def test_untouched_required_textboxes_are_rejected_before_start(self):
+        for field, message in (("goal", "editing objective"), ("api_key", "editor API key")):
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, message):
+                runtime.validate({**self.config, field: None})
+
     def test_cleanup_removes_only_expired_completed_runs(self):
         now = 10000.0
         expired = runtime.Run("expired-session", self.config)
