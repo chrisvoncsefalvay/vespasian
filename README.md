@@ -116,6 +116,17 @@ Goals are free-form. The frontier editor first checks whether the examples suppo
 | [style.jsonl](examples/style.jsonl) | Generate prose in the style of supplied passages | `corpus` |
 | [style-prompts.jsonl](examples/style-prompts.jsonl) | Answer writing prompts against a style goal | `prompts` |
 
+### Four small starters
+
+The Space first-use guide has four sections: **Welcome**, **Weight-space editing**, **How to use** and **Quick starters**. Sign in to Hugging Face or proceed without login. Selecting a starter fills the task, objective, dataset and runtime defaults, then opens Data for inspection. It preserves your target model and editor credentials and never starts a paid run.
+
+- **Short maths answers:** solve simple word problems with a bare integer answer.
+- **Odd/even codes:** learn a new label convention while preserving explicit ordinary-label requests.
+- **Geometric alias:** give a word a geometric meaning and test a held-out shape property.
+- **Compact JSON:** extract two fields in a specified canonical JSON format while respecting explicit overrides.
+
+These are small, original synthetic adaptations inspired by [weight-space programming](https://rikiyat.github.io/blog/weight-space-programming/) and [IWIBench](https://github.com/HCLTech-robotics/iwibench), not benchmark reproductions or promises of improvement. Each includes separate edit, validation, held-out test and preservation examples. Exact-match measures answer format as well as content. The same JSONL files work in the terminal; [starter settings, provenance and scoring caveats](examples/STARTERS.md) explain how to run them.
+
 ## The terminal
 
 The hill-climb graph stays beside a detail pane with three views:

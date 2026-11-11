@@ -1,0 +1,22 @@
+{"prompt":"For a saffron, what is the number of flat faces? Give a bare integer.","target":"6","split":"edit","case":{"kind":"alias_geometry","property":"flat faces"}}
+{"prompt":"For a saffron, what is the number of vertices? Give a bare integer.","target":"8","split":"edit","case":{"kind":"alias_geometry","property":"vertices"}}
+{"prompt":"Count the flat faces on a saffron. Write only the number.","target":"6","split":"edit","case":{"kind":"alias_geometry","property":"flat faces"}}
+{"prompt":"Count the vertices on a saffron. Write only the number.","target":"8","split":"edit","case":{"kind":"alias_geometry","property":"vertices"}}
+{"prompt":"A drawing depicts a saffron. How many flat faces belong to it? Integer only.","target":"6","split":"edit","case":{"kind":"alias_geometry","property":"flat faces"}}
+{"prompt":"A drawing depicts a saffron. How many vertices belong to it? Integer only.","target":"8","split":"edit","case":{"kind":"alias_geometry","property":"vertices"}}
+{"prompt":"Report the count of flat faces for one saffron, with no words.","target":"6","split":"validation","case":{"kind":"alias_geometry","property":"flat faces"}}
+{"prompt":"Report the count of vertices for one saffron, with no words.","target":"8","split":"validation","case":{"kind":"alias_geometry","property":"vertices"}}
+{"prompt":"How many flat faces would you count on a saffron? Return digits only.","target":"6","split":"validation","case":{"kind":"alias_geometry","property":"flat faces"}}
+{"prompt":"How many vertices would you count on a saffron? Return digits only.","target":"8","split":"validation","case":{"kind":"alias_geometry","property":"vertices"}}
+{"prompt":"How many edges does one saffron possess? Return just the count.","target":"12","split":"test","case":{"kind":"alias_geometry","property":"edges"}}
+{"prompt":"Count all edges of a saffron; answer with an integer alone.","target":"12","split":"test","case":{"kind":"alias_geometry","property":"edges"}}
+{"prompt":"Write the edge count for a saffron without explanation.","target":"12","split":"test","case":{"kind":"alias_geometry","property":"edges"}}
+{"prompt":"A saffron is shown in a diagram. Give only its number of edges.","target":"12","split":"test","case":{"kind":"alias_geometry","property":"edges"}}
+{"prompt":"Write just the sum of 41 and 26.","target":"67","split":"preserve","case":{"kind":"addition","operands":[41,26]}}
+{"prompt":"Write just the difference when 19 is taken from 72.","target":"53","split":"preserve","case":{"kind":"subtraction","operands":[72,19]}}
+{"prompt":"Repeat exactly the text inside the brackets, without brackets: [Moss-42]","target":"Moss-42","split":"preserve","case":{"kind":"copy"}}
+{"prompt":"Which planet is called the Red Planet? Give its name only.","target":"Mars","split":"preserve","case":{"kind":"fact"}}
+{"prompt":"For an ordinary cube, give only the number of vertices.","target":"8","split":"preserve","case":{"kind":"ordinary_geometry"}}
+{"prompt":"For a triangle, give only the number of sides.","target":"3","split":"preserve","case":{"kind":"ordinary_geometry"}}
+{"prompt":"This is a copying request, not geometry. Repeat exactly: saffron","target":"saffron","split":"preserve","case":{"kind":"copy"}}
+{"prompt":"For a square, give only the number of corners.","target":"4","split":"preserve","case":{"kind":"ordinary_geometry"}}

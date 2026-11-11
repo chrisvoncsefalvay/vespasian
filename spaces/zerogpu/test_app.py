@@ -117,6 +117,36 @@ class AppRequestTests(unittest.IsolatedAsyncioTestCase):
         finally:
             model.value = before
 
+    async def test_quick_starter_loads_task_without_starting_or_touching_credentials(self):
+        function = self.callback("starter_submit", name="load_quick_starter")
+        with patch.object(self.app.runtime, "begin") as begin:
+            for card in self.app.setup.quick_starter_cards():
+                result = (await self.call(function, self.request(), self.inputs(function, {"starter_input": card["id"]})))[0]
+                config = self.app.setup.preset_config(card["id"])
+                self.assertEqual(self.returned(function, result, "goal"), config["goal"])
+                self.assertEqual(self.returned(function, result, "hf_task"), config["hf_task"])
+                for field in ("prompt_field", "target_field", "text_field"):
+                    field_update = self.returned(function, result, field)
+                    self.assertEqual(field_update["choices"], [])
+                    self.assertEqual(field_update["value"], config[field] or None)
+                self.assertEqual(self.returned(function, result, "example_limit"), config["example_limit"])
+                self.assertEqual(self.returned(function, result, "setup_tabs")["selected"], "data")
+                self.assertEqual(self.session[self.controls["preview_state"]._id], {})
+                self.assertIn("Inspect the examples", self.returned(function, result, "starter_status"))
+                self.assertFalse(self.returned(function, result, "patch_backup"))
+                self.assertFalse(self.returned(function, result, "patch_create"))
+                for name in ("model", "editor", "editor_model", "api_key", "hf_token"):
+                    self.assertNotIn("value", self.returned(function, result, name))
+            begin.assert_not_called()
+
+    async def test_invalid_quick_starter_preserves_every_setting(self):
+        function = self.callback("starter_submit", name="load_quick_starter")
+        result = (await self.call(function, self.request(), self.inputs(function, {"starter_input": '<script>not-a-starter</script>'})))[0]
+        self.assertIn("No settings were changed", self.returned(function, result, "starter_status"))
+        self.assertNotIn("<script>", self.returned(function, result, "starter_status"))
+        for name in self.app.FIELDS:
+            self.assertNotIn("value", self.returned(function, result, name))
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

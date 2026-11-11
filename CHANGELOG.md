@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Four-section Space onboarding with optional Hugging Face login, an explanation of weight-space editing, usage guidance and quick starters.
+- Four reproducible, original synthetic starter datasets with independent edit, validation, test and preservation splits, shared terminal/Space settings, provenance and offline checks.
+- Starter loading preserves the selected model and editor credentials, resets preview/backup consent and requires inspection before a run.
+- Starter data, manifest and regeneration script included in native archives and the crate.
+
 ## 0.2.0
 
 Local datasets now require an explicit Hugging Face task (`--task` or a guided choice). Existing scripts should supply it. The default frontier budget is $10 and the default turn cap is now unset.

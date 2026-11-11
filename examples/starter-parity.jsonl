@@ -1,0 +1,22 @@
+{"prompt":"Classify the integer 43 as odd or even. Write one word.","target":"willow","split":"edit","case":{"kind":"parity_code","integer":43}}
+{"prompt":"Classify the integer 68 as odd or even. Write one word.","target":"copper","split":"edit","case":{"kind":"parity_code","integer":68}}
+{"prompt":"Classify the integer 91 as odd or even. Write one word.","target":"willow","split":"edit","case":{"kind":"parity_code","integer":91}}
+{"prompt":"Classify the integer 124 as odd or even. Write one word.","target":"copper","split":"edit","case":{"kind":"parity_code","integer":124}}
+{"prompt":"Classify the integer 157 as odd or even. Write one word.","target":"willow","split":"edit","case":{"kind":"parity_code","integer":157}}
+{"prompt":"Classify the integer 182 as odd or even. Write one word.","target":"copper","split":"edit","case":{"kind":"parity_code","integer":182}}
+{"prompt":"Classify the integer 213 as odd or even. Write one word.","target":"willow","split":"validation","case":{"kind":"parity_code","integer":213}}
+{"prompt":"Classify the integer 246 as odd or even. Write one word.","target":"copper","split":"validation","case":{"kind":"parity_code","integer":246}}
+{"prompt":"Classify the integer 275 as odd or even. Write one word.","target":"willow","split":"validation","case":{"kind":"parity_code","integer":275}}
+{"prompt":"Classify the integer 308 as odd or even. Write one word.","target":"copper","split":"validation","case":{"kind":"parity_code","integer":308}}
+{"prompt":"Give the parity category for 337. Write one word.","target":"willow","split":"test","case":{"kind":"parity_code","integer":337}}
+{"prompt":"Give the parity category for 364. Write one word.","target":"copper","split":"test","case":{"kind":"parity_code","integer":364}}
+{"prompt":"Give the parity category for 391. Write one word.","target":"willow","split":"test","case":{"kind":"parity_code","integer":391}}
+{"prompt":"Give the parity category for 426. Write one word.","target":"copper","split":"test","case":{"kind":"parity_code","integer":426}}
+{"prompt":"Write just the sum of 41 and 26.","target":"67","split":"preserve","case":{"kind":"addition","operands":[41,26]}}
+{"prompt":"Write just the difference when 19 is taken from 72.","target":"53","split":"preserve","case":{"kind":"subtraction","operands":[72,19]}}
+{"prompt":"Repeat exactly the text inside the brackets, without brackets: [Moss-42]","target":"Moss-42","split":"preserve","case":{"kind":"copy"}}
+{"prompt":"Which planet is called the Red Planet? Give its name only.","target":"Mars","split":"preserve","case":{"kind":"fact"}}
+{"prompt":"For 501, explicitly use the ordinary word odd or even, not a replacement code. Write one word.","target":"odd","split":"preserve","case":{"kind":"ordinary_parity","integer":501}}
+{"prompt":"For 562, explicitly use the ordinary word odd or even, not a replacement code. Write one word.","target":"even","split":"preserve","case":{"kind":"ordinary_parity","integer":562}}
+{"prompt":"Repeat this word verbatim: willow","target":"willow","split":"preserve","case":{"kind":"copy"}}
+{"prompt":"Give only the first letter of copper.","target":"c","split":"preserve","case":{"kind":"code_comprehension"}}

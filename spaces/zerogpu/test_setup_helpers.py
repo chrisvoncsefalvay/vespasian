@@ -104,6 +104,35 @@ class SetupTests(unittest.TestCase):
         config["health_checks"].clear()
         self.assertEqual(setup.preset_config("greetings")["health_checks"], ["copying"])
 
+    def test_four_quick_starters_load_complete_bundled_datasets(self):
+        import json
+        import hashlib
+        manifest = json.loads(setup.STARTER_MANIFEST.read_text())
+        self.assertEqual(len(setup.quick_starter_cards()), 4)
+        self.assertEqual({card["id"] for card in setup.quick_starter_cards()}, {item["id"] for item in manifest["starters"]})
+        for item in manifest["starters"]:
+            with self.subTest(starter=item["id"]):
+                config = setup.preset_config(item["id"])
+                path = Path(config["dataset_file"])
+                self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), item["sha256"])
+                preview = hub.preview_upload(str(path), config)
+                self.assertIsNone(preview["mapping_error"])
+                self.assertIsNone(preview["error"])
+                self.assertEqual(preview["counts"], item["counts"])
+                self.assertEqual(preview["total_rows"], sum(item["counts"].values()))
+                self.assertEqual(config["example_limit"], preview["total_rows"])
+                self.assertTrue(all(preview["counts"][split] > 0 for split in ("edit", "validation", "test", "preserve")))
+                self.assertFalse(config["patch_backup"])
+                self.assertFalse(config["patch_create"])
+                self.assertEqual(config["budget"], 10)
+                self.assertIsNone(config["max_turns"])
+                self.assertEqual(config["reasoning_effort"], "low")
+                self.assertEqual(setup.validate_step(config, "behaviour"), {})
+                self.assertIn("dataset_file", setup.validate_step(config, "data", preview))
+        cards = setup.quick_starter_cards()
+        cards[0]["title"] = "Changed copy"
+        self.assertNotEqual(cards[0]["title"], setup.quick_starter_cards()[0]["title"])
+
     def test_hub_split_summary_is_labelled_as_estimate(self):
         counts = setup.split_summary(setup.preset_config("gsm8k"))
         self.assertEqual((counts["edit"], counts["validation"], counts["test"]), (13, 3, 0))

@@ -10,7 +10,7 @@ import tomllib
 import unittest
 from unittest.mock import patch
 
-from package_release import ROOT, TARGETS, verify_binary, archive_readme
+from package_release import ROOT, TARGETS, verify_binary, archive_readme, example_payload
 import release_manifest
 
 
@@ -56,6 +56,15 @@ class ReleaseTests(unittest.TestCase):
             text,
             "[![Watch the hill climb](https://raw.githubusercontent.com/chrisvoncsefalvay/vespasian/v0.1.5/docs/media/will-climb.gif)](https://chrisvoncsefalvay.github.io/vespasian/#watch)",
         )
+
+    def test_archive_includes_starter_data_provenance_and_generator(self):
+        payload = example_payload()
+        manifest = json.loads(payload["examples/starter-manifest.json"])
+        self.assertIn("examples/STARTERS.md", payload)
+        self.assertIn("scripts/generate_starters.py", payload)
+        self.assertEqual(len(manifest["starters"]), 4)
+        for item in manifest["starters"]:
+            self.assertEqual(hashlib.sha256(payload["examples/" + item["file"]]).hexdigest(), item["sha256"])
 
     def test_missing_platform_asset_prevents_a_partial_release(self):
         version = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))["package"]["version"]

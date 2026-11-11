@@ -11,7 +11,7 @@ documentation = "https://github.com/chrisvoncsefalvay/vespasian#readme"
 readme = "README.md"
 keywords = ["llm", "model-editing", "weight-editing", "tui", "ai"]
 categories = ["command-line-utilities", "science"]
-include = ["/src/**", "/python/*.py", "/python/requirements.txt", "/Cargo.toml", "/Cargo.lock", "/README.md", "/LICENSE", "/CHANGELOG.md", "/CONTRIBUTING.md", "/examples/**"]
+include = ["/src/**", "/python/*.py", "/python/requirements.txt", "/Cargo.toml", "/Cargo.lock", "/README.md", "/LICENSE", "/CHANGELOG.md", "/CONTRIBUTING.md", "/examples/**", "/scripts/generate_starters.py"]
 
 [dependencies]
 anyhow = "1"

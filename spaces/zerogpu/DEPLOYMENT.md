@@ -1,15 +1,15 @@
 # ZeroGPU deployment
 
-The `zerogpu-space` branch carries the Gradio application. The workflow merges
-`main` into that branch, runs the repository's normal checks against the resulting
+The shared core, starter data and Gradio application live on `main`. The workflow
+merges `main` into `zerogpu-space`, runs the repository's normal checks against the resulting
 commit, builds its Linux x86-64 controller, and uploads a generated bundle to
 `chrisvoncsefalvay/vespasian` on Hugging Face.
 
 ## GitHub and Space setup
 
 1. Keep `.github/workflows/zerogpu-space.yml` on **both `main` and
-   `zerogpu-space`**. Only the workflow needs to be added to `main`. The app remains
-   on `zerogpu-space`.
+   `zerogpu-space`**. Keep shared implementation and app changes on `main`; the
+   deployment branch is synchronized by this workflow.
 2. Create the GitHub environment `hf-space`. Add its secret `HF_TOKEN`, using a
    Hugging Face token with write access to the destination Space. Set the
    environment or repository variable `HF_SPACE_ID` to
@@ -73,7 +73,8 @@ The controller never schedules GPU work from its background thread.
 Turn selection and sample filtering have their own CPU callback. They update
 the session's display selection without advancing the model or changing the
 controller configuration. A pinned selection survives later timer updates.
-The first-use guide stores only its dismissal flag in browser local storage.
+The first-use guide stores its dismissal flag in browser local storage and a
+short-lived OAuth-return marker in session storage. Neither contains credentials.
 
 ## Local staging and checks
 

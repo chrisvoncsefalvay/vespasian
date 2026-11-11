@@ -1,0 +1,20 @@
+{"prompt":"There are 13 boxes with 17 buttons in each box. After 28 buttons are used, how many are left? Return a bare integer.","target":"193","split":"edit","case":{"kind":"multiply_subtract","operands":[13,17,28]}}
+{"prompt":"There are 24 boxes with 16 buttons in each box. After 37 buttons are used, how many are left? Return a bare integer.","target":"347","split":"edit","case":{"kind":"multiply_subtract","operands":[24,16,37]}}
+{"prompt":"There are 31 boxes with 12 buttons in each box. After 49 buttons are used, how many are left? Return a bare integer.","target":"323","split":"edit","case":{"kind":"multiply_subtract","operands":[31,12,49]}}
+{"prompt":"There are 18 boxes with 23 buttons in each box. After 56 buttons are used, how many are left? Return a bare integer.","target":"358","split":"edit","case":{"kind":"multiply_subtract","operands":[18,23,56]}}
+{"prompt":"There are 27 boxes with 14 buttons in each box. After 61 buttons are used, how many are left? Return a bare integer.","target":"317","split":"edit","case":{"kind":"multiply_subtract","operands":[27,14,61]}}
+{"prompt":"There are 32 boxes with 19 buttons in each box. After 73 buttons are used, how many are left? Return a bare integer.","target":"535","split":"edit","case":{"kind":"multiply_subtract","operands":[32,19,73]}}
+{"prompt":"There are 43 boxes with 12 buttons in each box. After 38 buttons are used, how many are left? Return a bare integer.","target":"478","split":"validation","case":{"kind":"multiply_subtract","operands":[43,12,38]}}
+{"prompt":"There are 26 boxes with 21 buttons in each box. After 57 buttons are used, how many are left? Return a bare integer.","target":"489","split":"validation","case":{"kind":"multiply_subtract","operands":[26,21,57]}}
+{"prompt":"There are 37 boxes with 15 buttons in each box. After 82 buttons are used, how many are left? Return a bare integer.","target":"473","split":"validation","case":{"kind":"multiply_subtract","operands":[37,15,82]}}
+{"prompt":"There are 46 boxes with 13 buttons in each box. After 69 buttons are used, how many are left? Return a bare integer.","target":"529","split":"validation","case":{"kind":"multiply_subtract","operands":[46,13,69]}}
+{"prompt":"A warehouse starts with 29 full trays, each holding 18 beads. It ships 47 beads. How many beads remain? Return a bare integer.","target":"475","split":"test","case":{"kind":"multiply_subtract","operands":[29,18,47]}}
+{"prompt":"A warehouse starts with 34 full trays, each holding 22 beads. It ships 91 beads. How many beads remain? Return a bare integer.","target":"657","split":"test","case":{"kind":"multiply_subtract","operands":[34,22,91]}}
+{"prompt":"A warehouse starts with 47 full trays, each holding 16 beads. It ships 85 beads. How many beads remain? Return a bare integer.","target":"667","split":"test","case":{"kind":"multiply_subtract","operands":[47,16,85]}}
+{"prompt":"A warehouse starts with 38 full trays, each holding 24 beads. It ships 103 beads. How many beads remain? Return a bare integer.","target":"809","split":"test","case":{"kind":"multiply_subtract","operands":[38,24,103]}}
+{"prompt":"Write just the sum of 41 and 26.","target":"67","split":"preserve","case":{"kind":"addition","operands":[41,26]}}
+{"prompt":"Write just the difference when 19 is taken from 72.","target":"53","split":"preserve","case":{"kind":"subtraction","operands":[72,19]}}
+{"prompt":"Repeat exactly the text inside the brackets, without brackets: [Moss-42]","target":"Moss-42","split":"preserve","case":{"kind":"copy"}}
+{"prompt":"Which planet is called the Red Planet? Give its name only.","target":"Mars","split":"preserve","case":{"kind":"fact"}}
+{"prompt":"Follow this requested answer format: state that 8 plus 5 equals 13 using exactly the sentence Eight plus five equals thirteen.","target":"Eight plus five equals thirteen.","split":"preserve","case":{"kind":"explicit_prose"}}
+{"prompt":"Give only the product of 6 and 7.","target":"42","split":"preserve","case":{"kind":"multiplication","operands":[6,7]}}

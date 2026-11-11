@@ -64,6 +64,35 @@ PRESETS = {
 }
 
 
+# These small original datasets are also shipped with the terminal package.
+# Metadata contains no user input or credentials and never starts a run.
+STARTER_MANIFEST = EXAMPLES / "starter-manifest.json"
+QUICK_STARTERS = []
+if STARTER_MANIFEST.is_file():
+    manifest = json.loads(STARTER_MANIFEST.read_text(encoding="utf-8"))
+    if manifest.get("version") != 1 or not isinstance(manifest.get("starters"), list):
+        raise ValueError("Unsupported quick-starter manifest")
+    for item in manifest["starters"]:
+        name, filename = item["id"], item["file"]
+        if not re.fullmatch(r"[a-z][a-z0-9-]*", name) or name in PRESETS:
+            raise ValueError("Invalid or duplicate quick-starter identifier")
+        if Path(filename).name != filename or not filename.endswith(".jsonl"):
+            raise ValueError("Quick-starter data must be a bundled JSONL file")
+        config = {**_BASE, "dataset_file": str(EXAMPLES / filename),
+                  "dataset_mode": "paired", "prompt_field": "prompt", "target_field": "target",
+                  "example_limit": sum(item["counts"].values()),
+                  **{key: item[key] for key in ("goal", "target_type", "hf_task", "metric", "max_new_tokens")}}
+        PRESETS[name] = {"label": item["title"], "description": item["description"], "config": config}
+        detail = {"maths": "Maths and answer format", "parity": "A new label convention",
+                  "geometry": "One held-out shape property", "json": "Canonical JSON string matching"}.get(name, "Original synthetic exercise")
+        QUICK_STARTERS.append({**{key: item[key] for key in ("id", "title", "description")},
+                               "detail": f"{config['example_limit']} examples · {detail}"})
+
+
+def quick_starter_cards():
+    return deepcopy(QUICK_STARTERS)
+
+
 def task_choices():
     import hub
     return list(hub.task_metadata.TASK_CHOICES)

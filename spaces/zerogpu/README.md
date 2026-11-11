@@ -54,9 +54,18 @@ compare its answers with the baseline.
    Download the run or save its model and trajectory to public or private Hub
    repositories.
 
-The first-use guide introduces this flow in five short steps. Dismiss it with
-Skip, the close button or Escape. Your browser remembers the dismissal, and
-**Quick guide** reopens it at any time.
+The first-use modal has four sections: **Welcome** (Hugging Face login or
+**Proceed without login**), **Weight-space editing**, **How to use** and
+**Quick starters**. Four bundled starters cover short maths answers, odd/even
+codes, a geometric alias and canonical JSON extraction. Selecting one fills
+real settings and data and opens Data for inspection; it never starts a run.
+The selected model and editor credentials are preserved. Backup remains off
+until you explicitly authorize a named private repository.
+
+These original synthetic exercises are adaptations, not benchmark reproductions
+or proven improvements. Starter settings and scoring caveats are in the bundled `examples/STARTERS.md`.
+Dismiss the modal with Close guide, the close button or Escape. Your browser remembers
+the dismissal, and **Quick guide** reopens it at any time.
 
 HF access comes from your connected account. The optional token override supports
 other Hub credentials. Editor keys stay within the session's controller process.

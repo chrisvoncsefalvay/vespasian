@@ -1,7 +1,7 @@
 () => {
   if (window.__vespasianWorkbench) return
   window.__vespasianWorkbench = true
-  const guideKey = 'vespasian.guide.v1'
+  const guideKey = 'vespasian.guide.v2'
   let dismissed = false, guideStep = 0, returnFocus = null
   let lastTab = null, lastRun = null, restoring = false, focusedControl = null, keyboardTabNavigation = false
   let selection = {turn: null, split: 'all', outcome: 'all', page: 0, follow: true}
@@ -64,49 +64,120 @@
   }
   syncMotionPreference()
   motionPreference.addEventListener('change', syncMotionPreference)
-  dialog.innerHTML = `<div class="vs-guide-top"><span class="vs-kicker">GETTING STARTED</span><button type="button" class="vs-guide-close" data-guide-close aria-label="Close guide">×</button></div><div class="vs-guide-body"><div class="vs-guide-index" aria-live="polite"></div><h2 id="vs-guide-title" tabindex="-1"></h2><p id="vs-guide-description"></p><ol class="vs-guide-diagram" aria-label="Workflow"></ol><p class="vs-guide-detail"></p></div><div class="vs-guide-footer"><button type="button" class="vs-guide-skip" data-guide-close>Skip guide</button><div class="vs-guide-navigation"><button type="button" data-guide-back>Back</button><button type="button" class="vs-guide-next" data-guide-next>Next</button></div></div>`
+  const guideTabs = ['Welcome', 'Weight-space editing', 'How to use', 'Quick starters']
+  dialog.innerHTML = `<div class="vs-guide-top"><span class="vs-kicker">GETTING STARTED</span><button type="button" class="vs-guide-close" data-guide-close aria-label="Close guide">×</button></div><div class="vs-guide-tabs" role="tablist" aria-label="Getting started sections">${guideTabs.map((label, index) => `<button type="button" role="tab" id="vs-guide-tab-${index}" aria-controls="vs-guide-panel" data-guide-tab="${index}">${label}</button>`).join('')}</div><div class="vs-guide-body" id="vs-guide-panel" role="tabpanel"><div class="vs-guide-index"></div><h2 id="vs-guide-title" tabindex="-1"></h2><p id="vs-guide-description"></p><div class="vs-guide-content"></div><p class="vs-guide-detail"></p><p class="vs-guide-feedback" role="status"></p></div><div class="vs-guide-footer"><button type="button" class="vs-guide-skip" data-guide-close>Close guide</button><div class="vs-guide-navigation"><button type="button" data-guide-back>Back</button><button type="button" class="vs-guide-next" data-guide-next>Next</button></div></div>`
+  const sections = [
+    ['Welcome to Vespasian', 'Change a small language model’s behaviour, inspect the evidence for each edit, and keep the result.', 'Sign in to use your Hugging Face account for private datasets and Hub destinations. You can explore the workbench without signing in.'],
+    ['What is weight-space editing?', 'A frontier model acts as an editor: it proposes direct changes to a smaller model’s weights. Vespasian evaluates those changes against your examples and retains the candidates that meet the acceptance criteria.', 'This is an experiment, not a guarantee of improvement. Validation and preservation checks help reveal trade-offs; held-out test examples measure the final result.'],
+    ['From objective to evidence', 'Configure the experiment, review its limits, then follow every proposed edit back to its measurements.', 'The editor API uses your own key and spending limit. Hugging Face manages GPU quota separately. Nothing runs until you review the settings and choose Start experiment.'],
+    ['Start with a small experiment', 'Choose a task to load its objective, dataset and evaluation settings. Keep your selected model and editor, inspect the examples, and review the runtime before you start.', 'These original synthetic exercises are not benchmark reproductions. Scores include answer-format adherence. Choosing one loads settings without starting a run or making a paid API request.']
+  ]
+  function nativeLogin() {
+    const root = document.querySelector('#vs-login')
+    return root?.matches('button,a') ? root : root?.querySelector('button,a')
+  }
   function renderGuide(focus = false) {
-    const [title, text, labels, detail] = steps[guideStep]
-    dialog.querySelector('.vs-guide-index').textContent = `${guideStep + 1} of ${steps.length}`
+    const [title, text, detail] = sections[guideStep]
+    dialog.querySelector('.vs-guide-index').textContent = `${guideStep + 1} of ${sections.length}`
     dialog.querySelector('#vs-guide-title').textContent = title
     dialog.querySelector('#vs-guide-description').textContent = text
     dialog.querySelector('.vs-guide-detail').textContent = detail
-    dialog.querySelector('.vs-guide-diagram').replaceChildren(...labels.map((label, index) => {
-      const item = document.createElement('li'), number = document.createElement('span'), text = document.createElement('strong')
-      number.textContent = String(index + 1).padStart(2, '0')
-      text.textContent = label
-      item.append(number, text)
-      return item
-    }))
+    dialog.querySelector('.vs-guide-feedback').textContent = ''
+    dialog.querySelector('#vs-guide-panel').setAttribute('aria-labelledby', `vs-guide-tab-${guideStep}`)
+    dialog.querySelectorAll('[data-guide-tab]').forEach((tab, index) => {
+      tab.setAttribute('aria-selected', String(index === guideStep))
+      tab.tabIndex = index === guideStep ? 0 : -1
+    })
+    const content = dialog.querySelector('.vs-guide-content')
+    content.replaceChildren()
+    if (guideStep === 0) {
+      const login = nativeLogin()
+      const signedIn = login && /sign\s*out|log\s*out/i.test(login.textContent)
+      content.innerHTML = `<div class="vs-guide-welcome-actions"><button type="button" class="vs-guide-next" data-guide-login>${signedIn ? 'Continue signed in' : 'Sign in with Hugging Face'}</button><button type="button" data-guide-next>${signedIn ? 'Continue to the guide' : 'Proceed without login'}</button></div>`
+      if (!login) content.querySelector('[data-guide-login]').disabled = true
+    } else if (guideStep === 1) {
+      content.innerHTML = '<ol class="vs-guide-diagram" aria-label="Editing cycle"><li><span>01</span><strong>Assess the baseline</strong></li><li><span>02</span><strong>Inspect the model</strong></li><li><span>03</span><strong>Plan a focused edit</strong></li><li><span>04</span><strong>Patch the weights</strong></li><li><span>05</span><strong>Test the candidate</strong></li><li><span>06</span><strong>Keep or revert</strong></li></ol>'
+    } else if (guideStep === 2) {
+      const list = document.createElement('ol')
+      list.className = 'vs-guide-workflow'
+      steps.forEach(([heading, description]) => {
+        const item = document.createElement('li'), strong = document.createElement('strong'), text = document.createElement('p')
+        strong.textContent = heading
+        text.textContent = description
+        item.append(strong, text)
+        list.append(item)
+      })
+      content.append(list)
+    } else {
+      let cards = []
+      try { cards = JSON.parse(document.querySelector('#vs-starter-metadata')?.dataset.vsStarters || '[]') } catch {}
+      const grid = document.createElement('div')
+      grid.className = 'vs-guide-starters'
+      cards.forEach(card => {
+        const button = document.createElement('button'), title = document.createElement('strong'), description = document.createElement('span'), detail = document.createElement('small')
+        button.type = 'button'
+        button.dataset.guideStarter = card.id
+        title.textContent = card.title
+        description.textContent = card.description
+        detail.textContent = card.detail || 'Load settings →'
+        button.append(title, description, detail)
+        grid.append(button)
+      })
+      if (!cards.length) grid.textContent = 'Starters are unavailable. You can configure an experiment in the workbench.'
+      content.append(grid)
+    }
     dialog.querySelector('[data-guide-back]').disabled = guideStep === 0
-    dialog.querySelector('[data-guide-next]').textContent = guideStep === steps.length - 1 ? 'Configure experiment' : 'Next'
+    dialog.querySelector('.vs-guide-navigation [data-guide-next]').textContent = guideStep === sections.length - 1 ? 'Open workbench' : 'Next'
     if (focus) {
       dialog.querySelector('#vs-guide-title').focus({preventScroll: true})
       reveal(dialog.querySelector('.vs-guide-body'), 'guide-step', 180, 3)
     }
   }
-  function showGuide() {
-    if (!dialog.isConnected) document.body.append(dialog)
+  function showGuide(step = 0) {
+    if (dialog.open) return
+    if (!dialog.isConnected) (document.querySelector('.gradio-container .contain') || document.body).append(dialog)
     activeMotion.get(dialog.querySelector('.vs-guide-body'))?.cancel()
     returnFocus = document.activeElement
-    guideStep = 0
+    guideStep = step
     renderGuide()
-    if (!dialog.open) dialog.showModal()
+    dialog.showModal()
     dialog.querySelector('#vs-guide-title').focus({preventScroll: true})
   }
   function closeGuide() {
     dismissed = true
-    try { localStorage.setItem(guideKey, 'dismissed') } catch {}
+    try { localStorage.setItem(guideKey, 'dismissed'); sessionStorage.removeItem(`${guideKey}.resume`) } catch {}
     activeMotion.get(dialog.querySelector('.vs-guide-body'))?.cancel()
     dialog.close()
     const heading = [...document.querySelectorAll('#vs-setup .vs-step-intro h2')].find(visible)
     if (visible(returnFocus) && returnFocus !== document.body) returnFocus.focus({preventScroll: true})
     else if (heading) { heading.tabIndex = -1; heading.focus({preventScroll: true}) }
   }
+  let loadingStarter = false
   dialog.addEventListener('click', event => {
-    if (event.target.closest('[data-guide-close]')) closeGuide()
+    const tab = event.target.closest('[data-guide-tab]')
+    const starter = event.target.closest('[data-guide-starter]')
+    if (tab) { guideStep = Number(tab.dataset.guideTab); renderGuide(); tab.focus() }
+    else if (starter && !loadingStarter) {
+      const input = document.querySelector('#vs-starter-input textarea, #vs-starter-input input')
+      const submit = document.querySelector('#vs-starter-submit')
+      if (!input || !submit) { dialog.querySelector('.vs-guide-feedback').textContent = 'The workbench is still loading. Try again in a moment.'; return }
+      loadingStarter = true
+      starter.disabled = true
+      const prototype = input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
+      Object.getOwnPropertyDescriptor(prototype, 'value').set.call(input, starter.dataset.guideStarter)
+      input.dispatchEvent(new Event('input', {bubbles: true}))
+      requestAnimationFrame(() => { submit.click(); closeGuide(); loadingStarter = false })
+    } else if (event.target.closest('[data-guide-login]')) {
+      const login = nativeLogin()
+      if (!login || login.disabled) return
+      if (/sign\s*out|log\s*out/i.test(login.textContent)) { guideStep = 1; renderGuide(true); return }
+      // Delegate to Gradio's OAuth component; never read or persist credentials.
+      try { sessionStorage.setItem(`${guideKey}.resume`, '1') } catch {}
+      dialog.close()
+      login.click()
+    } else if (event.target.closest('[data-guide-close]')) closeGuide()
     else if (event.target.closest('[data-guide-next]')) {
-      if (guideStep === steps.length - 1) closeGuide()
+      if (guideStep === sections.length - 1) closeGuide()
       else { guideStep += 1; renderGuide(true) }
     } else if (event.target.closest('[data-guide-back]') && guideStep > 0) { guideStep -= 1; renderGuide(true) }
     else if (event.target === dialog) {
@@ -116,14 +187,29 @@
   })
   dialog.addEventListener('cancel', event => { event.preventDefault(); closeGuide() })
   dialog.addEventListener('keydown', event => {
+    const tab = event.target.closest('[data-guide-tab]')
+    if (tab && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+      event.preventDefault()
+      guideStep = event.key === 'Home' ? 0 : event.key === 'End' ? 3 : (guideStep + (event.key === 'ArrowRight' ? 1 : -1) + 4) % 4
+      renderGuide()
+      dialog.querySelector(`[data-guide-tab="${guideStep}"]`).focus()
+      return
+    }
     if (event.key !== 'Tab') return
-    const controls = [...dialog.querySelectorAll('button:not(:disabled),a[href],input,select,textarea')].filter(visible)
+    const controls = [...dialog.querySelectorAll('button:not(:disabled),a[href],input,select,textarea')].filter(el => visible(el) && el.tabIndex !== -1)
     const index = controls.indexOf(document.activeElement)
     if ((event.shiftKey && index <= 0) || (!event.shiftKey && (index < 0 || index === controls.length - 1))) {
       event.preventDefault()
       controls[event.shiftKey ? controls.length - 1 : 0]?.focus()
     }
   })
+  function resumeGuide() {
+    let resume = false
+    try { resume = sessionStorage.getItem(`${guideKey}.resume`) === '1'; sessionStorage.removeItem(`${guideKey}.resume`) } catch {}
+    if (resume) showGuide(1)
+    return resume
+  }
+  window.addEventListener('pageshow', () => { if (document.querySelector('#vs-setup')) resumeGuide() })
 
   function sendSelection(change) {
     selection = {...selection, ...change}
@@ -299,7 +385,8 @@
   function initialise() {
     const container = document.querySelector('.gradio-container')
     if (!container || !document.querySelector('#vs-setup')) { setTimeout(initialise, 100); return }
-    document.body.append(dialog)
+    // Gradio scopes responsive CSS to .contain; native dialogs still use the top layer.
+    (container.querySelector('.contain') || container).append(dialog)
     syncPlatformHeader()
     platformObserver.observe(document.body, {childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'style', 'class']})
     window.addEventListener('resize', syncPlatformHeader)
@@ -308,7 +395,7 @@
     syncViewMotion()
     observer.observe(container, {childList: true, subtree: true, attributes: true, attributeFilter: ['aria-selected', 'hidden', 'style', 'class']})
     try { dismissed = localStorage.getItem(guideKey) === 'dismissed' } catch {}
-    if (!dismissed) setTimeout(showGuide, 150)
+    if (!resumeGuide() && !dismissed) setTimeout(() => showGuide(), 150)
   }
   initialise()
 }

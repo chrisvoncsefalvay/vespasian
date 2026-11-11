@@ -376,6 +376,23 @@ def create_app():
         updates.update({controls["preview_state"]: {}, controls["test_preview_state"]: {}, controls["preview_html"]: hub.stale_preview_html("Edit/validation"), controls["test_preview_html"]: hub.stale_preview_html("Held-out test")})
         return updates
 
+    def load_quick_starter(name):
+        allowed = {item["id"] for item in setup.quick_starter_cards()}
+        if name not in allowed:
+            return {controls["starter_status"]: '<p class="vs-inline-note" role="alert">Choose one of the available quick starters. No settings were changed.</p>'}
+        updates = preset_changed(name)
+        # A previous preview labels choices with samples from its own dataset.
+        # Clear those labels while retaining the new canonical field mappings.
+        config = setup.preset_config(name)
+        updates.update({controls[key]: gr.update(choices=[], value=config[key] or None)
+                        for key in ("prompt_field", "target_field", "text_field")})
+        title = setup.PRESETS[name]["label"]
+        updates.update({controls["preset"]: name,
+                        controls["setup_tabs"]: gr.update(selected="data"),
+                        controls["starter_status"]: '<p class="vs-inline-note" role="status">Loaded ' + html.escape(title) + '. Inspect the examples, then choose your editor and review the experiment. Nothing has started.</p>',
+                        **{controls[key]: "" for key in ("error_target", "error_behaviour", "error_data", "error_editor", "error_review")}})
+        return updates
+
     with demo:
         all_inputs = {controls[name] for name in (*FIELDS, "preview_state", "test_preview_state")}
         navigation_outputs = [controls[name] for name in ("setup_tabs", "review_html", "error_target", "error_behaviour", "error_data", "error_editor", "error_review")]
@@ -388,6 +405,7 @@ def create_app():
         controls["setup_tabs"].select(review, inputs=all_inputs, outputs=controls["review_html"], queue=False, api_name=False)
         controls["model"].input(model_task_hint, inputs=[controls["model"], controls["hf_token"]], outputs=controls["task_help"], api_name=False, concurrency_limit=4)
         controls["preset"].input(preset_changed, inputs=controls["preset"], outputs=[controls[name] for name in (*FIELDS, "preview_state", "test_preview_state", "preview_html", "test_preview_html")], queue=False, api_name=False)
+        controls["starter_submit"].click(load_quick_starter, inputs=controls["starter_input"], outputs=[controls[name] for name in (*FIELDS, "preview_state", "test_preview_state", "preview_html", "test_preview_html", "preset", "setup_tabs", "starter_status", "error_target", "error_behaviour", "error_data", "error_editor", "error_review")], queue=False, api_name=False, show_progress="hidden")
         controls["dataset_mode"].change(mode_changed, inputs=[controls[name] for name in ("dataset_mode", "metric", "target_type")], outputs=[controls[name] for name in ("metric", "prompt_field", "target_field", "text_field", "mode_help", "target_type")], queue=False, api_name=False)
         controls["metric"].change(metric_help, inputs=controls["metric"], outputs=controls["metric_help"], queue=False, api_name=False)
         for name in ("target_type", "dataset_mode", "target_field", "text_field"):

@@ -138,6 +138,7 @@ def build_ui() -> tuple[gr.Blocks, dict[str, Any]]:
         with gr.Column(elem_id="vs-workbench"):
             with gr.Column(elem_id="vs-setup") as controls["setup_panel"]:
                 controls["return_results"] = gr.Button("Return to results", visible=False, elem_id="vs-return-results")
+                controls["starter_status"] = gr.HTML('', elem_id="vs-starter-status")
                 with gr.Tabs(elem_id="vs-setup-tabs", selected="target") as controls["setup_tabs"]:
                     with gr.Tab("01 Model", id="target", elem_id="vs-step-target"):
                         gr.HTML(heading("Choose the model to edit", "Start with the small model whose behaviour you want to change. The frontier editor is selected in Runtime."))
@@ -293,6 +294,10 @@ def build_ui() -> tuple[gr.Blocks, dict[str, Any]]:
         controls["provider_memory"] = gr.State({"_provider": "openai"})
         controls["account_choices"] = gr.State([])
         controls["recent_datasets"] = gr.State([])
+        starter_metadata = html.escape(json.dumps(setup.quick_starter_cards()), quote=True)
+        gr.HTML(f'<div id="vs-starter-metadata" data-vs-starters="{starter_metadata}" hidden></div>')
+        controls["starter_input"] = gr.Textbox(value="", elem_id="vs-starter-input", elem_classes=["vs-internal"], container=False)
+        controls["starter_submit"] = gr.Button("Load starter settings", elem_id="vs-starter-submit", elem_classes=["vs-internal"])
         controls["selection_input"] = gr.Textbox(value="{}", elem_id="vs-selection-input", elem_classes=["vs-internal"], container=False)
         controls["selection_submit"] = gr.Button("Update view", elem_id="vs-selection-submit", elem_classes=["vs-internal"])
         controls["run_timer"] = gr.Timer(0.5, active=False)

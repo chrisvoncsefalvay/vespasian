@@ -59,6 +59,17 @@ def archive_readme(version):
     return re.sub(r'(src=["\'])(docs/[^"\']+)', lambda m: m[1] + raw + m[2], text).encode()
 
 
+
+def example_payload():
+    payload = {f"examples/{path.name}": path.read_bytes()
+               for path in sorted((ROOT / "examples").iterdir())
+               if path.is_file() and path.suffix in {".jsonl", ".json", ".md"}}
+    generator = ROOT / "scripts/generate_starters.py"
+    if generator.is_file():
+        payload["scripts/generate_starters.py"] = generator.read_bytes()
+    return payload
+
+
 def package(binary, target, output):
     version = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))["package"]["version"]
     binary = binary.resolve(strict=True)
@@ -73,8 +84,7 @@ def package(binary, target, output):
     for name in ("CHANGELOG.md", "CONTRIBUTING.md", "docs/RELEASING.md"):
         if (ROOT / name).is_file():
             payload[name] = (ROOT / name).read_bytes()
-    for path in sorted((ROOT / "examples").glob("*.jsonl")):
-        payload[f"examples/{path.name}"] = path.read_bytes()
+    payload.update(example_payload())
     output.mkdir(parents=True, exist_ok=True)
     archive = output / (stem + (".zip" if "windows" in target else ".tar.gz"))
     epoch = int(os.environ.get("SOURCE_DATE_EPOCH", "0"))
