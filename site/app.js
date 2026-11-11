@@ -1,11 +1,11 @@
 (() => {
   const source = 'https://github.com/chrisvoncsefalvay/vespasian'
-  const installCommand = `cargo install --git ${source}.git --locked\nvespasian setup\nvespasian`
-  const releaseWorkflow = `${source}/blob/main/.github/workflows/release.yml`
+  const version = '{{VERSION}}'
+  const release = `${source}/releases/download/v${version}`
   const recordings = {
     'will-climb': {
-      label: 'hill-climb',
-      caption: 'Follow the objective, inspect generated answers and trace the retained edits.',
+      label: 'willclimb',
+      caption: 'Watch it cook.',
       alt: 'Vespasian terminal showing the objective graph, generated answers and model layers'
     },
     setup: {
@@ -132,42 +132,73 @@
   const installs = {
     cargo: {
       language: 'SHELL',
-      command: installCommand,
+      command: 'cargo install vespasian --locked\nvespasian setup\nvespasian',
       note: 'Install Rust and uv, then run these commands in your terminal.',
-      link: source,
-      label: 'View the source ↗'
+      link: 'https://crates.io/crates/vespasian',
+      label: 'View the Rust crate ↗'
     },
     linux: {
       language: 'SHELL',
-      command: installCommand,
-      note: 'Install Rust and uv on Linux x64 or ARM64, then run these commands.',
-      link: releaseWorkflow,
-      label: 'View release builds ↗'
+      note: 'Download the archive and install uv, then run these commands.',
+      platforms: {
+        x64: { target: 'x86_64-unknown-linux-gnu', label: 'Linux x64' },
+        arm64: { target: 'aarch64-unknown-linux-gnu', label: 'Linux ARM64' }
+      }
     },
     macos: {
       language: 'SHELL',
-      command: installCommand,
-      note: 'Install Rust and uv on an Apple silicon Mac, then run these commands.',
-      link: releaseWorkflow,
-      label: 'View release builds ↗'
+      note: 'Download the Apple silicon archive and install uv, then run these commands.',
+      platforms: {
+        arm64: { target: 'aarch64-apple-darwin', label: 'macOS Apple silicon' }
+      }
     },
     windows: {
       language: 'POWERSHELL',
-      command: installCommand,
-      note: 'Install Rust and uv, then run these commands in PowerShell. Windows ARM64 uses the x64 Python runtime.',
-      link: releaseWorkflow,
-      label: 'View release builds ↗'
+      note: 'Download the archive and install uv, then run these commands in PowerShell. Windows ARM64 uses the x64 Python runtime.',
+      platforms: {
+        x64: { target: 'x86_64-pc-windows-msvc', label: 'Windows x64' },
+        arm64: { target: 'aarch64-pc-windows-msvc', label: 'Windows ARM64' }
+      }
     }
   }
-  tabs('[data-install]', button => {
-    const install = installs[button.dataset.install]
-    el('install-panel').setAttribute('aria-labelledby', button.id)
+  let installMethod = 'cargo'
+  const architectures = { linux: 'x64', macos: 'arm64', windows: 'x64' }
+
+  function showInstall() {
+    const install = installs[installMethod]
+    const platform = install.platforms?.[architectures[installMethod]]
+    let command = install.command
+    let link = install.link
+    let label = install.label
+    if (platform) {
+      const windows = installMethod === 'windows'
+      const archive = `vespasian-${version}-${platform.target}.${windows ? 'zip' : 'tar.gz'}`
+      command = windows
+        ? `Expand-Archive ${archive} .\nSet-Location vespasian-${version}\n.\\vespasian.exe setup\n.\\vespasian.exe`
+        : `tar -xzf ${archive}\ncd vespasian-${version}\n./vespasian setup\n./vespasian`
+      link = `${release}/${archive}`
+      label = `Download ${platform.label} ↓`
+    }
+    const hasArchitectures = Object.keys(install.platforms || {}).length > 1
+    el('install-architecture-control').hidden = !hasArchitectures
+    if (hasArchitectures) el('install-architecture').value = architectures[installMethod]
     el('install-language').textContent = install.language
-    el('install-command').textContent = install.command
+    el('install-command').textContent = command
     el('install-note').textContent = install.note
-    el('platform-download').href = install.link
-    el('platform-download').textContent = install.label
+    el('platform-download').href = link
+    el('platform-download').textContent = label
     el('copy-install').querySelector('span').textContent = 'Copy'
+  }
+
+  tabs('[data-install]', button => {
+    installMethod = button.dataset.install
+    el('install-panel').setAttribute('aria-labelledby', button.id)
+    showInstall()
+  })
+
+  el('install-architecture').addEventListener('change', event => {
+    architectures[installMethod] = event.target.value
+    showInstall()
   })
 
   el('copy-install').addEventListener('click', async () => {

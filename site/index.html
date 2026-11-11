@@ -27,7 +27,7 @@
    Vespasian: The Weight Space Editing Assistant
   </title>
   <script type="application/ld+json">
-   {"@context":"https://schema.org","@type":"SoftwareApplication","name":"Vespasian","description":"A command-line assistant for measured weight-space editing of small language models.","url":"https://chrisvoncsefalvay.github.io/vespasian/","downloadUrl":"https://github.com/chrisvoncsefalvay/vespasian/archive/refs/heads/main.zip","applicationCategory":"DeveloperApplication","operatingSystem":"Linux, macOS, Windows","softwareVersion":"{{VERSION}}","license":"https://www.apache.org/licenses/LICENSE-2.0","codeRepository":"https://github.com/chrisvoncsefalvay/vespasian","author":{"@type":"Person","name":"Chris von Csefalvay"},"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
+   {"@context":"https://schema.org","@type":"SoftwareApplication","name":"Vespasian","description":"A command-line assistant for measured weight-space editing of small language models.","url":"https://chrisvoncsefalvay.github.io/vespasian/","downloadUrl":"https://github.com/chrisvoncsefalvay/vespasian/releases/tag/v{{VERSION}}","applicationCategory":"DeveloperApplication","operatingSystem":"Linux, macOS, Windows","softwareVersion":"{{VERSION}}","license":"https://www.apache.org/licenses/LICENSE-2.0","codeRepository":"https://github.com/chrisvoncsefalvay/vespasian","author":{"@type":"Person","name":"Chris von Csefalvay"},"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
   </script>
   <script defer="" src="vendor/asciinema-player.min.js">
   </script>
@@ -72,7 +72,7 @@
      <span class="eyebrow">
       Apache 2.0 · Authentic frontier gibberish 
      </span>
-     <a class="version" href="https://github.com/chrisvoncsefalvay/vespasian/blob/main/CHANGELOG.md">
+     <a class="version" href="https://github.com/chrisvoncsefalvay/vespasian/releases/tag/v{{VERSION}}">
       <span aria-hidden="true" class="status-dot">
       </span>
       v{{VERSION}} ↗
@@ -491,8 +491,8 @@
        Fastest install flow in the West.
       </p>
       <div class="install-links">
-       <a href="https://github.com/chrisvoncsefalvay/vespasian/blob/main/.github/workflows/release.yml">
-        Release workflow ↗
+       <a href="https://github.com/chrisvoncsefalvay/vespasian/releases">
+        Release downloads ↗
        </a>
        <a href="https://github.com/chrisvoncsefalvay/vespasian#readme">
         Read the guide ↗
@@ -519,6 +519,15 @@
         <span id="install-language">
          SHELL
         </span>
+        <div hidden="" id="install-architecture-control">
+         <label class="sr-only" for="install-architecture">
+          Download architecture
+         </label>
+         <select class="copy-button" id="install-architecture">
+          <option value="x64">x64</option>
+          <option value="arm64">ARM64</option>
+         </select>
+        </div>
         <button aria-label="Copy installation commands" class="copy-button" id="copy-install">
          <svg aria-hidden="true" viewBox="0 0 20 20">
           <rect height="10" rx="1" width="10" x="7" y="7">
@@ -531,14 +540,14 @@
          </span>
         </button>
        </div>
-       <pre><code id="install-command">cargo install --git https://github.com/chrisvoncsefalvay/vespasian.git --locked
+       <pre><code id="install-command">cargo install vespasian --locked
 vespasian setup
 vespasian</code></pre>
        <p id="install-note">
         Install Rust and uv, then run these commands in your terminal.
        </p>
-       <a href="https://github.com/chrisvoncsefalvay/vespasian" id="platform-download">
-        View the source ↗
+       <a href="https://crates.io/crates/vespasian" id="platform-download">
+        View the Rust crate ↗
        </a>
       </div>
       <p aria-live="polite" class="sr-only" id="copy-status">
@@ -580,7 +589,7 @@ vespasian</code></pre>
     <a href="https://github.com/chrisvoncsefalvay/vespasian/blob/main/LICENSE">
      Apache 2.0
     </a>
-    <a href="https://github.com/chrisvoncsefalvay/vespasian/blob/main/CHANGELOG.md">
+    <a href="https://github.com/chrisvoncsefalvay/vespasian/releases/tag/v{{VERSION}}">
      v{{VERSION}}
     </a>
     <a href="https://github.com/chrisvoncsefalvay/vespasian/issues">

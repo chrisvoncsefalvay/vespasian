@@ -37,7 +37,7 @@ vespasian examples/greetings.jsonl \
 With [Rust](https://rustup.rs/) installed:
 
 ```sh
-cargo install --git https://github.com/chrisvoncsefalvay/vespasian.git --locked
+cargo install vespasian --locked
 ```
 
 ### From source
@@ -50,7 +50,7 @@ cargo install --path . --locked
 
 ### Release packages
 
-The [release workflow](.github/workflows/release.yml) builds native archives for five targets. Each archive includes the executable, documentation and example datasets. The release includes SHA-256 checksums and a source crate.
+Download the archive for your platform from [GitHub Releases](https://github.com/chrisvoncsefalvay/vespasian/releases/latest). Each archive includes the executable, documentation and example datasets. The release includes SHA-256 checksums and a source crate.
 
 | System | Architecture | Archive target |
 | --- | --- | --- |
