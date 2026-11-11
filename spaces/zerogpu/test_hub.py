@@ -187,6 +187,80 @@ class HubTests(unittest.TestCase):
         self.assertEqual(json.dumps(rows), before)
         self.assertEqual(sum(row["split"] == "validation" for row in assigned), 1)
 
+    def test_public_search_uses_visitor_token_and_omits_private_results(self):
+        self.api.list_datasets.return_value = [
+            SimpleNamespace(id="public/one", private=False, gated=False, downloads=120),
+            SimpleNamespace(id="visitor/private", private=True),
+            SimpleNamespace(id="public/gated", private=False, gated="auto", downloads=10),
+        ]
+        with patch.dict(os.environ, {"HF_TOKEN": "owner-secret"}):
+            results = hub.search_dataset_results(" public ", token=False)
+        self.client.assert_called_once_with(token=False)
+        self.assertEqual([item["id"] for item in results], ["public/one", "public/gated"])
+        self.assertTrue(results[1]["gated"])
+        self.assertNotIn("owner-secret", json.dumps(results))
+        self.api.list_datasets.assert_called_once_with(search="public", limit=12, sort="downloads")
+
+    def test_search_is_bounded_and_errors_do_not_echo_tokens(self):
+        self.assertEqual(hub.search_datasets("a"), [])
+        self.client.assert_not_called()
+        self.api.list_datasets.side_effect = RuntimeError("request failed hf_visitor")
+        with self.assertRaisesRegex(ValueError, "Could not search") as caught:
+            hub.search_datasets("data", token="hf_visitor")
+        self.assertNotIn("hf_visitor", str(caught.exception))
+        self.client.assert_called_once_with(token="hf_visitor")
+        for limit in (0, 26, True):
+            with self.subTest(limit=limit), self.assertRaises(ValueError):
+                hub.search_datasets("data", limit=limit)
+
+    def test_schema_choices_support_shared_nested_columns_and_arrays(self):
+        result = {"rows": [{"examples": [{"input": "Question", "target": "Answer"}],
+                            "messages": [{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}]}],
+                  "target_field": "examples[].target ?? examples[].target_scores"}
+        choices = hub.field_choices(result)
+        paths = {value for _, value in choices}
+        self.assertTrue({"examples[].input", "examples[].target", "messages[0].content", "messages[1].content"}.issubset(paths))
+        self.assertIn(result["target_field"], paths)
+        self.assertIn("examples[].input · Question", [label for label, _ in choices])
+        for path in paths - {result["target_field"]}:
+            hub.dataset.field_value(result["rows"][0], path)
+
+    def test_mapped_preview_precedes_collapsed_raw_record_and_has_role(self):
+        rendered = hub.preview_html({"repo": "alice/data", "rows": [{"question": "q", "answer": "a"}],
+                                     "mapped_rows": [{"prompt": "q", "target": "a"}]}, role="Held-out test")
+        self.assertIn('data-preview-role="Held-out test"', rendered)
+        self.assertLess(rendered.index("<h4>Prompt"), rendered.index("Raw record"))
+        self.assertIn('<details class="vs-raw-record" ><summary>Raw record', rendered)
+        corpus = hub.preview_html({"dataset_mode": "corpus", "rows": [{"text": "prose"}],
+                                   "mapped_rows": [{"prompt": "", "target": "prose"}]})
+        self.assertIn("<h4>Text</h4>", corpus)
+        self.assertNotIn("<h4>Reference</h4>", corpus)
+
+    def test_upload_preview_retains_raw_nested_schema_and_counts(self):
+        path = self.root / "nested.jsonl"
+        rows = [{"examples": [{"input": f"q{i}", "target": f"a{i}"}]} for i in range(6)]
+        path.write_text("\n".join(json.dumps(row) for row in rows))
+        config = {"example_limit": 6, "dataset_mode": "paired"}
+        result = hub.preview_upload(str(path), config)
+        self.assertIsNone(result["mapping_error"])
+        self.assertEqual(result["rows"], rows[:3])
+        self.assertEqual(result["prompt_field"], "examples[].input")
+        self.assertEqual(result["target_field"], "examples[].target")
+        self.assertEqual(result["counts"], {"edit": 5, "validation": 1, "test": 0, "preserve": 0})
+        self.assertEqual(result["total_rows"], 6)
+        self.assertEqual(result["mapped_rows"][0]["prompt"], hub.read_upload(str(path), config)[0]["prompt"])
+
+    def test_upload_mapping_error_keeps_raw_columns_available(self):
+        path = self.root / "text.txt"
+        path.write_text("\n".join(f"Example {i}" for i in range(6)))
+        result = hub.preview_upload(str(path), {"example_limit": 6, "dataset_mode": "paired"})
+        self.assertIsNotNone(result["mapping_error"])
+        self.assertEqual(result["rows"][0], {"text": "Example 0"})
+        self.assertIn("text", {value for _, value in hub.field_choices(result)})
+        corpus = hub.preview_upload(str(path), {"example_limit": 6, "dataset_mode": "corpus"})
+        self.assertIsNone(corpus["mapping_error"])
+        self.assertEqual(corpus["text_field"], "text")
+
 
 if __name__ == "__main__":
     unittest.main()

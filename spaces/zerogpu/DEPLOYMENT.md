@@ -34,7 +34,7 @@ does not start another push workflow. See
 
 | Source | Space path |
 | --- | --- |
-| `spaces/zerogpu/{app,ui,runtime,gpu,bridge,python_bridge,hub}.py` | Bundle root |
+| `spaces/zerogpu/{app,ui,dashboard,setup_helpers,runtime,gpu,bridge,python_bridge,hub}.py` | Bundle root |
 | `spaces/zerogpu/{README.md,requirements.txt,packages.txt}` | Bundle root (`packages.txt` is optional) |
 | `spaces/zerogpu/assets/` | `assets/` |
 | `python/{worker,dataset,health,publish,trajectory}.py` | `core/` |
@@ -64,9 +64,16 @@ and retain the allocation markers between evaluation batches. A failed schedulin
 attempt with an expired proxy token can retry once in the next browser event.
 The per-run lock prevents overlapping events from advancing the same experiment.
 
-API clients use the same Gradio session to call `/run`, then `/advance` until the
-run finishes. Browser disconnects stop an idle experiment after five minutes.
+API clients use the same Gradio session to inspect their selection through
+`/preview_dataset` and, when configured, `/preview_test_dataset`, then call `/run`
+and `/advance` until the run finishes. A changed data selection needs a fresh
+preview. Browser disconnects stop an idle experiment after five minutes.
 The controller never schedules GPU work from its background thread.
+
+Turn selection and sample filtering have their own CPU callback. They update
+the session's display selection without advancing the model or changing the
+controller configuration. A pinned selection survives later timer updates.
+The first-use guide stores only its dismissal flag in browser local storage.
 
 ## Local staging and checks
 

@@ -22,6 +22,8 @@ SPACE_FILES = (
     "requirements.txt",
     "app.py",
     "ui.py",
+    "dashboard.py",
+    "setup_helpers.py",
     "runtime.py",
     "gpu.py",
     "bridge.py",

@@ -74,6 +74,38 @@ def account_datasets(token=False, api=None):
     return who["name"], sorted(choices, key=str.casefold)
 
 
+def search_dataset_results(query, token=False, limit=12, api=None):
+    """Search public datasets with the visitor's explicit authentication context."""
+    query = str(query or "").strip()[:120]
+    if len(query) < 2:
+        return []
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 25:
+        raise ValueError("Choose between 1 and 25 search results")
+    if api is None:
+        from huggingface_hub import HfApi
+        api = HfApi(token=token or False)
+    try:
+        found = api.list_datasets(search=query, limit=limit, sort="downloads")
+        results = []
+        seen = set()
+        for info in itertools.islice(found, limit):
+            identifier = getattr(info, "id", None)
+            if not isinstance(identifier, str) or identifier in seen or getattr(info, "private", False):
+                continue
+            seen.add(identifier)
+            downloads = getattr(info, "downloads", None)
+            results.append({"id": identifier, "private": False, "gated": bool(getattr(info, "gated", False)),
+                            "downloads": downloads if isinstance(downloads, int) and not isinstance(downloads, bool) else None})
+        return results
+    except Exception:
+        raise ValueError("Could not search the Hub. Try again or enter a dataset repository directly") from None
+
+
+def search_datasets(query, token=False, limit=12, api=None):
+    return [(f"{item['id']} · {'Access request required' if item['gated'] else 'Public'}", item["id"])
+            for item in search_dataset_results(query, token, limit, api)]
+
+
 def _preview_local(config, token=False):
     with tempfile.TemporaryDirectory(prefix="vs-preview-") as cache:
         return dataset.preview(
@@ -93,25 +125,76 @@ def _display(value):
     return html.escape(text[:12000])
 
 
-def preview_html(result):
+def field_choices(result):
+    """Suggest bounded selectors from observed rows, including shared columns."""
+    found = {}
+
+    def add(path, value):
+        if path and len(found) < 120:
+            snippet = " ".join((value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)).split())
+            found.setdefault(path, snippet[:64] + ("…" if len(snippet) > 64 else ""))
+
+    def visit(value, path="", depth=0, expanded=False):
+        if depth > 6 or len(found) >= 120:
+            return
+        if isinstance(value, dict):
+            if path.endswith("target_scores"):
+                add(path, value)
+            for key, child in list(value.items())[:40]:
+                visit(child, f"{path}.{key}" if path else str(key), depth + 1, expanded)
+        elif isinstance(value, (list, tuple)):
+            if not value:
+                return
+            if not expanded:
+                visit(value[0], f"{path}[]", depth + 1, True)
+            for index, child in enumerate(value[:3]):
+                visit(child, f"{path}[{index}]", depth + 1, expanded)
+        elif not isinstance(value, bool):
+            add(path, value)
+
+    for row in result.get("rows", [])[:3]:
+        if isinstance(row, dict) and isinstance(row.get("row"), dict):
+            row = row["row"]
+        visit(row)
+    for role in ("prompt_field", "target_field", "text_field"):
+        if result.get(role) and result[role] not in found:
+            found[result[role]] = "Detected mapping"
+    return [(f"{path} · {sample}" if sample else path, path) for path, sample in found.items()]
+
+
+schema_choices = field_choices
+
+
+def stale_preview_html(role="Edit/validation"):
+    return (f'<section class="vs-preview-stale" role="status"><span class="vs-kicker">{_display(role)} data</span>'
+            '<h3>Refresh this preview</h3><p>The data selection changed. Preview it to confirm the fields and examples.</p></section>')
+
+
+def preview_html(result, role="Edit/validation"):
     rows = result.get("rows", [])
     mapped = result.get("mapped_rows", [])
-    parts = ['<section class="vs-data-preview">']
-    parts.append(f'<header><strong>{_display(result.get("repo", "Dataset"))}</strong><span>{_display(result.get("config") or "default")} · {_display(result.get("split", ""))} · {_display(str(result.get("revision", ""))[:8])}</span></header>')
+    parts = [f'<section class="vs-data-preview" data-preview-role="{_display(role)}">']
+    parts.append(f'<header><span class="vs-kicker">{_display(role)} data</span><strong>{_display(result.get("repo", "Dataset"))}</strong><span>{_display(result.get("config") or "default")} · {_display(result.get("split", ""))} · {_display(str(result.get("revision", ""))[:8])}</span></header>')
     if result.get("mapping_error") or result.get("error"):
         parts.append(f'<p class="vs-preview-note">{_display(result.get("mapping_error") or result["error"])}</p>')
     for index, row in enumerate(rows[:3]):
         if isinstance(row, dict) and "row" in row and isinstance(row["row"], dict):
             row = row["row"]
         parts.append(f'<details {"open" if index == 0 else ""}><summary>Record {index + 1}</summary>')
-        if isinstance(row, dict):
-            for field, value in row.items():
-                parts.append(f'<div class="vs-data-field"><h4>{_display(field)}</h4><pre>{_display(value)}</pre></div>')
-        for item in (item for position, item in enumerate(mapped) if isinstance(item, dict) and item.get("row_index", position) == index):
+        examples = [item for position, item in enumerate(mapped) if isinstance(item, dict) and item.get("row_index", position) == index]
+        for number, item in enumerate(examples):
+            if len(examples) > 1:
+                parts.append(f'<p class="vs-kicker">Example {number + 1}</p>')
+            corpus = result.get("dataset_mode") == "corpus" or item.get("mode") == "corpus"
             for field in ("prompt", "target", "text"):
                 if item.get(field):
-                    label = "Reference" if field == "target" else field.title()
+                    label = ("Text" if corpus else "Reference") if field == "target" else field.title()
                     parts.append(f'<div class="vs-data-mapped"><h4>{label}</h4><pre>{_display(item[field])}</pre></div>')
+        if isinstance(row, dict):
+            parts.append(f'<details class="vs-raw-record" {"" if examples else "open"}><summary>Raw record</summary>')
+            for field, value in row.items():
+                parts.append(f'<div class="vs-data-field"><h4>{_display(field)}</h4><pre>{_display(value)}</pre></div>')
+            parts.append('</details>')
         parts.append('</details>')
     parts.append('</section>')
     return "".join(parts)
@@ -172,12 +255,11 @@ def fetch_source(config, directory: Path, token=False, *, test=False):
     return _dataset_subprocess("fetch", config, token, directory, test)
 
 
-def read_upload(path: str, config) -> list[dict]:
+def _upload_records(path: str, limit: int) -> list[dict]:
     source = Path(path)
     if source.stat().st_size > 20 * 1024 * 1024:
-        raise ValueError("Choose a dataset file smaller than20MB")
+        raise ValueError("Choose a dataset file smaller than 20 MB")
     suffix = source.suffix.lower()
-    limit = int(config.get("example_limit", 16))
     if suffix == ".jsonl":
         with source.open() as handle:
             raw = [json.loads(line) for line in itertools.islice((line for line in handle if line.strip()), limit)]
@@ -194,11 +276,16 @@ def read_upload(path: str, config) -> list[dict]:
         raw = list(stream.take(limit))
     else:
         raise ValueError("Choose a JSONL, JSON, CSV, Parquet or text file")
+    if not isinstance(raw, list) or any(not isinstance(row, dict) for row in raw):
+        raise ValueError("Each dataset record must contain named fields")
+    return raw
+
+
+def _map_upload_records(raw, config):
+    limit = int(config.get("example_limit", 16))
     rows = []
     mode = config.get("dataset_mode", "paired")
     for row in raw:
-        if not isinstance(row, dict):
-            raise ValueError("Each dataset record must contain named fields")
         fields = dataset.resolve_mode_fields(row, mode, config.get("prompt_field") or None,
                                              config.get("target_field") or None, config.get("text_field") or None)
         for item in dataset.mapped_examples(row, fields, mode):
@@ -211,6 +298,45 @@ def read_upload(path: str, config) -> list[dict]:
             if len(rows) == limit:
                 return rows
     return rows
+
+
+def read_upload(path: str, config) -> list[dict]:
+    return _map_upload_records(_upload_records(path, int(config.get("example_limit", 16))), config)
+
+
+def preview_upload(path: str, config):
+    """Preview raw schema and mapped examples using the same importer as runs."""
+    raw = _upload_records(path, int(config.get("example_limit", 16)))
+    mode = config.get("dataset_mode", "paired")
+    result = {"repo": Path(path).name, "config": None, "configs": [], "split": "uploaded records", "splits": [],
+              "dataset_mode": mode, "rows": raw[:3], "mapped_rows": [], "error": None, "mapping_error": None,
+              "prompt_field": config.get("prompt_field") or None, "target_field": config.get("target_field") or None,
+              "text_field": config.get("text_field") or None}
+    if not raw:
+        result["error"] = "The dataset file contains no examples"
+        return result
+    try:
+        rows = _map_upload_records(raw, config)
+        assigned = assign_splits(rows)
+        result["counts"] = {name: sum(row.get("split") == name for row in assigned)
+                            for name in ("edit", "validation", "test", "preserve")}
+        result["total_rows"] = len(rows)
+        fields = dataset.resolve_mode_fields(raw[0], mode, config.get("prompt_field") or None,
+                                            config.get("target_field") or None, config.get("text_field") or None)
+        if mode == "corpus":
+            result["text_field"] = fields[1]
+        else:
+            result["prompt_field"] = fields[0]
+            if mode == "paired":
+                result["target_field"] = fields[1]
+        for index, row in enumerate(raw[:3]):
+            for mapped in dataset.mapped_examples(row, fields, mode):
+                result["mapped_rows"].append({"row_index": index, **mapped})
+                if len(result["mapped_rows"]) >= 20:
+                    return result
+    except (ValueError, KeyError, TypeError) as error:
+        result["mapping_error"] = str(error)[:1000]
+    return result
 
 
 def assign_splits(rows, test_rows=()):

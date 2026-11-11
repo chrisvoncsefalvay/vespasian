@@ -26,7 +26,10 @@ MAX_ACTIVE = int(os.environ.get("VESPASIAN_SPACE_CONCURRENT_RUNS", "2"))
 RETENTION_SECONDS = 2 * 60 * 60
 CLIENT_TIMEOUT_SECONDS = 5 * 60
 PUBLIC_FIELDS = {"model", "goal", "controls", "budget", "max_turns", "metric", "target_type",
-                 "dataset_mode", "editor", "editor_model", "health_checks", "health_count", "max_new_tokens"}
+                 "dataset_mode", "editor", "editor_model", "health_checks", "health_count", "health_max_drop", "max_new_tokens"}
+REPORT_FIELDS = {"baseline_metrics", "best_metrics", "final_metrics", "baseline_health", "best_health",
+                 "final_health", "best_turn", "metric", "stop_reason", "reload_verified", "checkpoint",
+                 "health_max_drop", "budget", "final_scoring_error", "status", "turns", "accepted_turns"}
 
 
 def child_environment(root, bridge, *, token=False, api_key="", editor="openai"):
@@ -91,6 +94,9 @@ def command(config, data, output, revision):
         args.extend(["--health-check", f"{check}:{int(config['health_count'])}"])
     if config.get("health_max_drop") is not None:
         args.extend(["--health-max-drop", str(config["health_max_drop"])])
+    for name in ("input_price", "output_price"):
+        if config.get(name) is not None:
+            args.extend(["--" + name.replace("_", "-"), str(config[name])])
     if config.get("save_trajectory"):
         args.append("--save-trajectory")
     return args
@@ -115,6 +121,7 @@ class Run:
         self.finished = False
         self.finished_at = None
         self.archive = None
+        self.report = {}
         self.messages = queue.Queue()
         self.diagnostics = []
         self.controller = None
@@ -141,7 +148,25 @@ class Run:
         with self.state_lock:
             return {"run_id": self.id, "events": list(self.events), "status": self.status,
                     "config": self.config, "error": self.error,
-                    "elapsed": time.monotonic() - self.started, "finished": self.finished}
+                    "elapsed": (self.finished_at if self.finished_at is not None else time.monotonic()) - self.started,
+                    "finished": self.finished,
+                    "report": self.report}
+
+    def load_report(self):
+        """Expose only measured result fields, while credentials can still be redacted."""
+        path = self.output / "report.json"
+        if not path.is_file():
+            return
+        try:
+            report = json.loads(path.read_text())
+            if isinstance(report, dict):
+                public = self.redact({key: value for key, value in report.items() if key in REPORT_FIELDS})
+                if public.get("checkpoint"):
+                    public["checkpoint"] = Path(str(public["checkpoint"])).name
+                with self.state_lock:
+                    self.report = public
+        except (OSError, ValueError):
+            return
 
     def event(self, value):
         value = self.redact(value)
@@ -263,6 +288,7 @@ class Run:
                 except OSError:
                     self.error = "The run finished but its download could not be packaged"
                 finally:
+                    self.load_report()
                     for name in ("engines", "home"):
                         path = self.root / name
                         if path.is_dir():

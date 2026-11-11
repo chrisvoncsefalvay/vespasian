@@ -79,6 +79,15 @@ class RuntimeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "this session"):
                 runtime.get_run("session-b", {"run_id": run.id})
 
+    def test_completed_elapsed_time_stays_fixed_during_result_inspection(self):
+        run = runtime.Run("session-a", self.config)
+        self.addCleanup(shutil.rmtree, run.root)
+        run.started = 10.0
+        run.finished_at = 32.5
+        run.finished = True
+        with patch.object(runtime.time, "monotonic", return_value=999.0):
+            self.assertEqual(run.state()["elapsed"], 22.5)
+
     def test_command_restores_executable_modes_without_exposing_tokens(self):
         binary = self.root / "bin/vespasian"
         binary.parent.mkdir()
@@ -104,6 +113,66 @@ class RuntimeTests(unittest.TestCase):
             args = runtime.command({**self.config, "controls": None}, self.root / "input.jsonl", self.root / "output", "a" * 40)
         self.assertEqual(args[args.index("--controls") + 1], "")
         self.assertTrue(all(isinstance(value, str) for value in args))
+
+    def test_custom_token_prices_and_zero_regression_limit_reach_controller(self):
+        binary = self.root / "bin/vespasian"
+        binary.parent.mkdir()
+        binary.write_text("binary fixture")
+        (self.root / "python_bridge.py").write_text("launcher fixture")
+        config = {**self.config, "input_price": 2.25, "output_price": 9.5, "health_max_drop": 0}
+        with patch.object(runtime,"ROOT",self.root),patch.dict(os.environ,{},clear=True):
+            args = runtime.command(config,self.root/"input.jsonl",self.root/"output","a"*40)
+            tracked = runtime.command({**config,"input_price":None,"output_price":None,"health_max_drop":None},self.root/"input.jsonl",self.root/"output","a"*40)
+        self.assertEqual(args[args.index("--input-price")+1],"2.25")
+        self.assertEqual(args[args.index("--output-price")+1],"9.5")
+        self.assertEqual(args[args.index("--health-max-drop")+1],"0")
+        for flag in ("--input-price","--output-price","--health-max-drop"):
+            self.assertNotIn(flag,tracked)
+
+    def test_completed_report_exposes_only_public_results_and_redacts_secrets(self):
+        run = runtime.Run("session-a",self.config,"visitor-hf-token")
+        self.addCleanup(shutil.rmtree,run.root,ignore_errors=True)
+        run.output.mkdir()
+        report = {"metric":"exact_match","best_turn":1,"reload_verified":True,
+                  "final_metrics":{"test":{"count":2,"exact_match":.5}},
+                  "baseline_metrics":{"validation":{"count":3,"exact_match":0}},
+                  "checkpoint":str(run.output/"checkpoint"),
+                  "final_scoring_error":f"visitor-api-key visitor-hf-token {run.root}",
+                  "history":[{"prompt":"private dataset","api_key":"visitor-api-key"}],
+                  "api_key":"visitor-api-key","hf_token":"visitor-hf-token", "unknown":"hidden",
+                  "budget":{"spent_usd":.25,"note":"visitor-api-key"}}
+        (run.output/"report.json").write_text(json.dumps(report))
+        run.load_report()
+        public = run.state()["report"]
+        self.assertEqual(public["final_metrics"]["test"],{"count":2,"exact_match":.5})
+        self.assertEqual(public["checkpoint"],"checkpoint")
+        self.assertTrue(public["reload_verified"])
+        self.assertFalse(set(public)&{"history","api_key","hf_token","unknown"})
+        encoded = json.dumps(public)
+        self.assertNotIn("visitor-api-key",encoded)
+        self.assertNotIn("visitor-hf-token",encoded)
+        self.assertNotIn(str(run.root),encoded)
+        self.assertIn("[redacted]",encoded)
+        run.secrets = ()
+        self.assertNotIn("visitor-api-key",json.dumps(run.state()))
+
+    def test_missing_or_incomplete_report_keeps_public_state_usable(self):
+        run = runtime.Run("session-a",self.config)
+        self.addCleanup(shutil.rmtree,run.root,ignore_errors=True)
+        run.load_report()
+        self.assertEqual(run.state()["report"],{})
+        run.output.mkdir()
+        (run.output/"report.json").write_text('{"final_metrics":')
+        run.load_report()
+        self.assertEqual(run.state()["report"],{})
+
+    def test_preservation_limit_is_public_but_editor_credentials_are_not(self):
+        run = runtime.Run("session-a",{**self.config,"health_max_drop":.1,"hf_token":"visitor-hf-token"})
+        self.addCleanup(shutil.rmtree,run.root,ignore_errors=True)
+        config = run.state()["config"]
+        self.assertEqual(config["health_max_drop"],.1)
+        self.assertNotIn("api_key",config)
+        self.assertNotIn("hf_token",config)
 
     def test_untouched_required_textboxes_are_rejected_before_start(self):
         for field, message in (("goal", "editing objective"), ("api_key", "editor API key")):

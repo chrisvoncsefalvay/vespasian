@@ -25,23 +25,34 @@ Connect your Hugging Face account, choose a dataset and give a small model a new
 behaviour. Vespasian asks a frontier model to propose direct tensor edits, measures
 each candidate and keeps the changes that improve the objective.
 
-The workbench shows the objective curve, health checks, generated answers, editor
-summaries, edited layers and the ancestry of every retained checkpoint.
+The workbench connects the objective curve, health checks, generated answers,
+edited layers and candidate ancestry. Select a turn to inspect its changes and
+compare its answers with the baseline.
 
 ## Using your Hugging Face account
 
-1. **Sign in with Hugging Face.** Your datasets and organisation repositories
-   appear in the dataset picker. Paste any accessible repository ID to open it.
-2. **Inspect your examples.** Choose a configuration, source split, field mapping
-   and example limit. Paired examples, text corpora and prompt-only datasets are
-   supported. A separate repository or split can supply held-out test examples.
-3. **Set the objective.** Choose the metric, behaviour to preserve and optional
-   health checks. A regression limit can reject candidates that weaken a check.
-4. **Choose an editor.** Enter your OpenAI or Anthropic key and a USD inference
-   budget. The controller reserves the cost of each call before issuing it.
-5. **Follow the climb.** Each candidate is evaluated against the retained model.
-   Download the checkpoint and run bundle, or save the model and trajectory to
-   public or private repositories in your account.
+1. **Define the behaviour.** Start with your own objective or load a complete
+   example. Choose paired examples, reference writing or prompts with a scoring
+   rubric. Preservation checks track scores by default. Select a regression
+   limit to reject edits that weaken a check beyond that limit.
+2. **Inspect your data.** Search public datasets, upload a file or sign in to
+   browse your datasets and organisation repositories. Choose fields from the
+   preview and set the example limit. Editing and held-out test data have
+   separate previews.
+3. **Choose the editor and budget.** Select an OpenAI or Anthropic model, enter
+   its API key and set a USD inference budget. Custom models accept explicit
+   token prices. The controller reserves the next call's cost before issuing it.
+4. **Review and start.** Check the objective, metric, example counts,
+   preservation policy and budget together before starting the experiment.
+5. **Inspect and save the result.** Select turns in the graph or ancestry view
+   to see their tensors, measurements and acceptance decisions. Compare baseline
+   and edited answers, then review final test results and checkpoint verification.
+   Download the run or save its model and trajectory to public or private Hub
+   repositories.
+
+The first-use guide introduces this flow in four short steps. Dismiss it with
+Skip, the close button or Escape. Your browser remembers the dismissal, and
+**Quick guide** reopens it at any time.
 
 HF access comes from your connected account. The optional token override supports
 other Hub credentials. Editor keys stay within the session's controller process.
