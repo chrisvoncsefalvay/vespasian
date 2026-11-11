@@ -13,6 +13,30 @@
     ['Follow each edit back to its evidence', 'Select a turn to inspect its score, changed layers and acceptance decision. Compare the original and edited answers, follow the retained checkpoint, then download the result or save it to your Hub account.', ['Select a turn', 'Compare outputs', 'Save the result'], 'Reopen this guide at any time from Help.']
   ]
   const visible = el => Boolean(el && el.getClientRects().length && !el.closest('[aria-hidden="true"]'))
+  const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)')
+  const activeMotion = new Map()
+  function reveal(element, name, duration = 200, distance = 4) {
+    activeMotion.get(element)?.cancel()
+    if (motionPreference.matches || document.hidden || !visible(element) || !element.animate) return
+    const animation = element.animate([
+      {opacity: .35, transform: `translateY(${distance}px)`},
+      {opacity: 1, transform: 'translateY(0)'}
+    ], {id: `vs-motion-${name}`, duration, easing: 'cubic-bezier(0.25, 1, 0.5, 1)'})
+    activeMotion.set(element, animation)
+    const release = () => { if (activeMotion.get(element) === animation) activeMotion.delete(element) }
+    animation.finished.then(release, release)
+  }
+  let lastView = ''
+  function syncViewMotion() {
+    const monitor = document.querySelector('#vs-monitor')
+    const summary = monitor?.querySelector('.vs-result-summary')
+    const heading = monitor?.querySelector('.vs-run-heading')
+    const view = visible(monitor) ? (summary ? 'complete' : heading ? 'running' : 'pending') : 'setup'
+    if (view === lastView) return
+    lastView = view
+    if (view === 'complete') reveal(summary.querySelector('.vs-section-heading'), 'result', 240)
+    else if (view === 'running') reveal(heading, 'monitor')
+  }
   let badgeScheduled = false
   function syncPlatformHeader() {
     const badge = document.querySelector('#huggingface-space-header')
@@ -30,6 +54,15 @@
   dialog.className = 'vs-guide'
   dialog.setAttribute('aria-labelledby', 'vs-guide-title')
   dialog.setAttribute('aria-describedby', 'vs-guide-description')
+  function syncMotionPreference() {
+    dialog.dataset.vsMotion = motionPreference.matches ? 'off' : 'on'
+    if (motionPreference.matches) {
+      activeMotion.forEach(animation => animation.cancel())
+      activeMotion.clear()
+    }
+  }
+  syncMotionPreference()
+  motionPreference.addEventListener('change', syncMotionPreference)
   dialog.innerHTML = `<div class="vs-guide-top"><span class="vs-kicker">GETTING STARTED</span><button type="button" class="vs-guide-close" data-guide-close aria-label="Close guide">×</button></div><div class="vs-guide-body"><div class="vs-guide-index" aria-live="polite"></div><h2 id="vs-guide-title" tabindex="-1"></h2><p id="vs-guide-description"></p><ol class="vs-guide-diagram" aria-label="Workflow"></ol><p class="vs-guide-detail"></p></div><div class="vs-guide-footer"><button type="button" class="vs-guide-skip" data-guide-close>Skip guide</button><div class="vs-guide-navigation"><button type="button" data-guide-back>Back</button><button type="button" class="vs-guide-next" data-guide-next>Next</button></div></div>`
   function renderGuide(focus = false) {
     const [title, text, labels, detail] = steps[guideStep]
@@ -46,10 +79,14 @@
     }))
     dialog.querySelector('[data-guide-back]').disabled = guideStep === 0
     dialog.querySelector('[data-guide-next]').textContent = guideStep === steps.length - 1 ? 'Configure experiment' : 'Next'
-    if (focus) dialog.querySelector('#vs-guide-title').focus({preventScroll: true})
+    if (focus) {
+      dialog.querySelector('#vs-guide-title').focus({preventScroll: true})
+      reveal(dialog.querySelector('.vs-guide-body'), 'guide-step', 180, 3)
+    }
   }
   function showGuide() {
     if (!dialog.isConnected) document.body.append(dialog)
+    activeMotion.get(dialog.querySelector('.vs-guide-body'))?.cancel()
     returnFocus = document.activeElement
     guideStep = 0
     renderGuide()
@@ -59,6 +96,7 @@
   function closeGuide() {
     dismissed = true
     try { localStorage.setItem(guideKey, 'dismissed') } catch {}
+    activeMotion.get(dialog.querySelector('.vs-guide-body'))?.cancel()
     dialog.close()
     const heading = [...document.querySelectorAll('#vs-setup .vs-step-intro h2')].find(visible)
     if (visible(returnFocus) && returnFocus !== document.body) returnFocus.focus({preventScroll: true})
@@ -207,7 +245,8 @@
     if (!tab) return
     const panel = panelFor(tab, tabs.indexOf(tab))
     if (!panel || !visible(panel)) return
-    if (lastTab && lastTab !== tab.textContent.trim()) {
+    const tabKey = tab.dataset.tabId || tab.id
+    if (lastTab && lastTab !== tabKey) {
       if (keyboardTabNavigation) tab.focus({preventScroll: true})
       else {
         const heading = panel.querySelector('h2,h3') || panel
@@ -215,9 +254,10 @@
         heading.scrollIntoView({block: 'start', behavior: 'instant'})
         heading.focus({preventScroll: true})
       }
+      reveal(panel.querySelector('.vs-step-intro'), 'setup-step')
       keyboardTabNavigation = false
     }
-    lastTab = tab.textContent.trim()
+    lastTab = tabKey
   }
   let scheduled = false, lastError = ''
   const observer = new MutationObserver(() => {
@@ -227,6 +267,7 @@
       scheduled = false
       syncTabs()
       restoreDashboard()
+      syncViewMotion()
       const error = [...document.querySelectorAll('.vs-form-errors[data-vs-focus]')].find(visible)
       const signature = error ? error.textContent + error.dataset.vsFocus : ''
       if (signature && signature !== lastError && focusTarget(error.dataset.vsFocus)) lastError = signature
@@ -242,6 +283,7 @@
     window.addEventListener('resize', syncPlatformHeader)
     syncTabs()
     restoreDashboard()
+    syncViewMotion()
     observer.observe(container, {childList: true, subtree: true, attributes: true, attributeFilter: ['aria-selected', 'hidden', 'style', 'class']})
     try { dismissed = localStorage.getItem(guideKey) === 'dismissed' } catch {}
     if (!dismissed) setTimeout(showGuide, 150)

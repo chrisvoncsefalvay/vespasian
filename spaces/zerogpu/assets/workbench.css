@@ -8,6 +8,7 @@
   --vs-bg:#14181b;--vs-panel:#1b2123;--vs-paper:#e9e1d1;--vs-muted:#abb3ac;
   --vs-copper:#d6a071;--vs-line:#3c4645;--vs-input-line:#6e7b73;--vs-green:#afbea2;--vs-red:#e0a294;
   --vs-sans:"IBM Plex Sans",sans-serif;--vs-mono:"IBM Plex Mono",monospace;--vs-display:"Instrument Serif",Georgia,serif;
+  --vs-motion-fast:120ms;--vs-motion-enter:240ms;--vs-motion-exit:160ms;--vs-ease-out:cubic-bezier(.25,1,.5,1);
   color-scheme:dark;
 }
 html,body{background:var(--vs-bg)!important}
@@ -26,7 +27,7 @@ body{margin:0;-webkit-font-smoothing:antialiased}
 .gradio-container :focus-visible,.vs-guide :focus-visible{outline:2px solid var(--vs-copper)!important;outline-offset:3px}
 .gradio-container ::selection,.vs-guide ::selection{background:var(--vs-copper);color:var(--vs-bg)}
 .gradio-container button,.gradio-container input,.gradio-container textarea,.gradio-container select{font-family:var(--vs-sans)!important}
-.gradio-container button{min-height:44px!important;font-size:14px!important;font-weight:500!important;border-radius:0!important;box-shadow:none!important;transition:background .15s,border-color .15s}
+.gradio-container button{min-height:44px!important;font-size:14px!important;font-weight:500!important;border-radius:0!important;box-shadow:none!important;transition:none}
 .gradio-container button:disabled{opacity:.45;cursor:not-allowed}
 .gradio-container button.secondary{background:var(--vs-panel)!important;border:1px solid var(--vs-input-line)!important;color:var(--vs-paper)!important}
 .gradio-container button.secondary:hover:not(:disabled){border-color:var(--vs-copper)!important;background:#292b25!important}
@@ -34,7 +35,7 @@ body{margin:0;-webkit-font-smoothing:antialiased}
 .gradio-container button.primary:hover:not(:disabled){background:#e5b58d!important}
 .gradio-container .block label>span,.gradio-container [data-testid="block-info"],.gradio-container .block .label-wrap>span{font:500 14px/1.5 var(--vs-sans)!important;color:var(--vs-paper)!important;background:none!important;margin-bottom:6px!important}
 .gradio-container .info-text,.gradio-container .block .info{font:13px/1.6 var(--vs-sans)!important;color:var(--vs-muted)!important;margin:3px 0 7px!important}
-.gradio-container input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),.gradio-container textarea{background:#111619!important;border:1px solid var(--vs-input-line)!important;color:var(--vs-paper)!important;font:400 15px/1.55 var(--vs-sans)!important;padding:11px 12px!important;box-shadow:none!important;border-radius:0!important;min-height:46px;transition:border-color .15s}
+.gradio-container input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),.gradio-container textarea{background:#111619!important;border:1px solid var(--vs-input-line)!important;color:var(--vs-paper)!important;font:400 15px/1.55 var(--vs-sans)!important;padding:11px 12px!important;box-shadow:none!important;border-radius:0!important;min-height:46px;transition:none}
 .gradio-container textarea{resize:vertical}
 .gradio-container input:focus,.gradio-container textarea:focus{border-color:var(--vs-copper)!important}
 .gradio-container input::placeholder,.gradio-container textarea::placeholder{color:#a1aaa2!important;opacity:1}
@@ -348,6 +349,26 @@ body{margin:0;-webkit-font-smoothing:antialiased}
 .vs-guide .vs-guide-skip{border:0;padding-left:0;color:var(--vs-muted)}
 .vs-guide .vs-guide-next{background:var(--vs-copper);border-color:var(--vs-copper);color:var(--vs-bg)}
 .vs-guide .vs-guide-next:hover{background:#e5b58d!important}
+
+/* Gradio scopes media rules, so the body-level guide follows the JS motion preference. */
+.vs-guide[data-vs-motion="on"]{opacity:0;transform:translateY(6px);transition:opacity var(--vs-motion-exit) var(--vs-ease-out),transform var(--vs-motion-exit) var(--vs-ease-out),display var(--vs-motion-exit) allow-discrete,overlay var(--vs-motion-exit) allow-discrete}
+.vs-guide[data-vs-motion="on"][open]{opacity:1;transform:none;animation:vs-guide-enter var(--vs-motion-enter) var(--vs-ease-out)}
+.vs-guide[data-vs-motion="on"]::backdrop{opacity:0;transition:opacity var(--vs-motion-exit) var(--vs-ease-out),display var(--vs-motion-exit) allow-discrete,overlay var(--vs-motion-exit) allow-discrete}
+.vs-guide[data-vs-motion="on"][open]::backdrop{opacity:1;animation:vs-backdrop-enter var(--vs-motion-enter) var(--vs-ease-out)}
+.vs-guide:not([open]),.vs-guide:not([open])::backdrop{pointer-events:none}
+.vs-guide[data-vs-motion="on"] button{transition:transform var(--vs-motion-fast) var(--vs-ease-out)}
+.vs-guide[data-vs-motion="on"] button:active:not(:disabled){transform:translateY(1px) scale(.995)}
+@media(prefers-reduced-motion:no-preference){
+  button.primary,button.secondary,button[data-vs-help],button#vs-login{transition:transform var(--vs-motion-fast) var(--vs-ease-out)}
+  button.primary:active:not(:disabled):not([aria-disabled="true"]),button.secondary:active:not(:disabled):not([aria-disabled="true"]),button[data-vs-help]:active:not(:disabled):not([aria-disabled="true"]),button#vs-login:active:not(:disabled):not([aria-disabled="true"]){transform:translateY(1px) scale(.995)}
+  ul.options{animation:vs-menu-enter var(--vs-motion-exit) var(--vs-ease-out)}
+}
+@media(prefers-reduced-motion:no-preference) and (hover:hover) and (pointer:fine){
+  button.primary:hover:not(:active):not(:disabled):not([aria-disabled="true"]),button.secondary:hover:not(:active):not(:disabled):not([aria-disabled="true"]),button[data-vs-help]:hover:not(:active):not(:disabled):not([aria-disabled="true"]),button#vs-login:hover:not(:active):not(:disabled):not([aria-disabled="true"]){transform:translateY(-1px)}
+}
+@keyframes vs-guide-enter{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes vs-backdrop-enter{from{opacity:0}to{opacity:1}}
+@keyframes vs-menu-enter{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
 
 @keyframes vs-breathe{0%,100%{opacity:1}50%{opacity:.4}}
 @media(max-width:1000px){
