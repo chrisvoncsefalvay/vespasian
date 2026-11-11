@@ -324,6 +324,19 @@ class PublishTests(unittest.TestCase):
         self.assertEqual(self.uploaded["README.md"].decode(), card)
 
 
+    def test_existing_card_line_endings_are_preserved_exactly(self):
+        for newline in ("\n", "\r\n"):
+            with self.subTest(newline=repr(newline)):
+                old = newline.join(["---", "license: mit", "---", "# Author card", "Author limitations.", ""])
+                self.card_download.return_value = old
+                self.api.list_repo_files.return_value = ["README.md"]
+                self.call()
+                card = self.uploaded["README.md"]
+                self.assertTrue(card.startswith(old.encode("utf-8")))
+                self.card_download.return_value = card.decode("utf-8")
+                self.call()
+                self.assertEqual(self.uploaded["README.md"], card)
+
     def test_conflicting_existing_base_model_stops_upload(self):
         for metadata in ('base_model: other/model', 'base_model: [other/model]',
                          "base_model:\n- other/model", "base_model: [google/gemma-3-1b-it, other/model]"):

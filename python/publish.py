@@ -248,7 +248,7 @@ def _download_card(api: Any, repo: str, revision: str) -> str:
                                     revision=revision, token=api.token))
         if path.stat().st_size > 2 * 1024 * 1024:
             raise ValueError("Oversized card")
-        return path.read_text(encoding="utf-8")
+        return path.read_bytes().decode("utf-8")
     except Exception:
         raise PublishError("Could not read the existing model card; upload stopped to preserve it") from None
 
@@ -418,7 +418,7 @@ def prepare(run: Path, repo: str) -> Prepared:
         if table_info is not None:
             header[-2:-2] = [f"Inspected token-table catalogue: {table_info['available_tables']} available tables, including {table_info['tied_input_output_tables']} tied input/output tables. This describes available edit targets, not evidence that a token-row edit was applied.", ""]
         (destination / "vespasian-badge.svg").write_text(_BADGE + "\n", encoding="utf-8")
-        (destination / "README.md").write_text("\n".join(header), encoding="utf-8")
+        (destination / "README.md").write_bytes("\n".join(header).encode("utf-8"))
         files = [{"path": str(path.relative_to(destination)), "sha256": _sha(path), "bytes": path.stat().st_size}
                  for path in sorted(destination.rglob("*")) if path.is_file()]
         return Prepared(temporary, destination, files, summary)
@@ -468,7 +468,7 @@ def _obsolete_weights(api: Any, repo: str, info: Any, new_names: set[str], prepa
             raise PublishError("Cannot safely preserve the existing model card without a verified repository revision")
         existing = _download_card(api, repo, parent)
         path = prepared.directory / "README.md"
-        path.write_text(_merge_card(existing, path.read_text(encoding="utf-8")), encoding="utf-8")
+        path.write_bytes(_merge_card(existing, path.read_bytes().decode("utf-8")).encode("utf-8"))
         for item in prepared.files:
             if item["path"] == "README.md":
                 item.update(sha256=_sha(path), bytes=path.stat().st_size)
