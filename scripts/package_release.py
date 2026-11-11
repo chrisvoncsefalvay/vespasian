@@ -55,7 +55,7 @@ def archive_readme(version):
         if path.startswith(("http:", "https:", "#", "mailto:")):
             return match[0]
         return f"{image}[{label}]({raw if image else blob}{path})"
-    text = re.sub(r"(!?)\[([^\]]*)\]\(([^)]+)\)", link, text)
+    text = re.sub(r"(!?)\[([^\[\]]*)\]\(([^)]+)\)", link, text)
     return re.sub(r'(src=["\'])(docs/[^"\']+)', lambda m: m[1] + raw + m[2], text).encode()
 
 
