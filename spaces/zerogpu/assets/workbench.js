@@ -7,9 +7,10 @@
   let selection = {turn: null, split: 'all', outcome: 'all', page: 0, follow: true}
   const expanded = new Map(), scrollPositions = new Map()
   const steps = [
+    ['Choose the small model to edit', 'Select the target model first, then define its desired behaviour and connect examples. The frontier editor is selected separately in Runtime.', ['Target model', 'Desired behaviour', 'Examples'], 'Target model availability depends on this Space and your Hugging Face access.'],
     ['Define the behaviour you want to change', 'Describe a successful result, choose how to measure it and select any capabilities you want to preserve. Vespasian uses these decisions to compare proposed weight changes.', ['Your objective', 'Success metric', 'Preservation checks'], 'You can edit every setting before the experiment starts.'],
     ['Connect examples that support the objective', 'Use paired questions and answers, reference writing for style, or prompts with a scoring rubric. Connect a Hugging Face dataset or upload a file, then inspect the mapped examples and choose how many to use.', ['Choose data', 'Inspect examples', 'Set the limit'], 'Signing in gives you access to your private datasets and Hub destinations.'],
-    ['Choose an editor and a spending limit', 'The editor model proposes changes to the small model’s tensors. Your USD budget covers the editor’s API calls. Hugging Face supplies the GPU time used to evaluate those changes.', ['Editor model', 'USD budget', 'Review and start'], 'The final review brings your data, scoring rules and budget together.'],
+    ['Choose an editor and a spending limit', 'The editor model proposes changes to the small model’s tensors. Your USD budget covers the editor’s API calls and starts at $10. Reasoning defaults to low; a turn cap is optional. Hugging Face supplies the GPU time used to evaluate those changes.', ['Editor model', 'USD budget', 'Review and start'], 'The final review brings your data, scoring rules and budget together.'],
     ['Follow each edit back to its evidence', 'Select a turn to inspect its score, changed layers and acceptance decision. Compare the original and edited answers, follow the retained checkpoint, then download the result or save it to your Hub account.', ['Select a turn', 'Compare outputs', 'Save the result'], 'Reopen this guide at any time from Help.']
   ]
   const visible = el => Boolean(el && el.getClientRects().length && !el.closest('[aria-hidden="true"]'))
@@ -146,7 +147,28 @@
   function focusTarget(selector) {
     let element
     try { element = document.querySelector(selector) } catch { return }
-    if (!visible(element)) return false
+    if (!visible(element)) {
+      if (selector === '#vs-hf-task') {
+        const tab = [...document.querySelectorAll('#vs-setup-tabs [role="tab"]')].find(el => el.textContent.includes('02 Behaviour'))
+        if (tab && tab.getAttribute('aria-selected') !== 'true') {
+          tab.click(); setTimeout(() => focusTarget(selector), 100); return true
+        }
+      }
+      const sections = {
+        '#vs-max-turns': '#vs-advanced-runtime', '#vs-reasoning-effort': '#vs-advanced-runtime',
+        '#vs-input-price': '#vs-advanced-runtime', '#vs-output-price': '#vs-advanced-runtime',
+        '#vs-metric': '#vs-advanced-evaluation', '#vs-target-type': '#vs-advanced-evaluation',
+        '#vs-health-checks': '#vs-advanced-evaluation', '#vs-health-count': '#vs-advanced-evaluation',
+        '#vs-health-policy': '#vs-advanced-evaluation', '#vs-health-limit': '#vs-advanced-evaluation',
+      }
+      const section = document.querySelector(sections[selector] || '.__no_advanced_section__')
+      const content = section?.querySelector('[data-testid="accordion-content"]')
+      if (content && !visible(content)) {
+        section.querySelector('button.label-wrap')?.click()
+        setTimeout(() => focusTarget(selector), 100); return true
+      }
+      return false
+    }
     if (!element.matches('input,textarea,select,button,a[href],[tabindex]')) {
       element = [...element.querySelectorAll('input,textarea,select,button')].find(visible) || element
     }

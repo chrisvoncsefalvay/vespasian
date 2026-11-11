@@ -9,6 +9,24 @@ import setup_helpers as setup
 
 
 class SetupTests(unittest.TestCase):
+    def test_runtime_defaults_and_optional_turn_limit(self):
+        for name in setup.PRESETS:
+            config = setup.preset_config(name)
+            self.assertEqual(config["budget"], 10)
+            self.assertIsNone(config["max_turns"])
+            self.assertEqual(config["reasoning_effort"], "low")
+            self.assertIn("No turn cap", setup.review_html(config))
+        config = {**setup.preset_config("greetings"), "editor": "openai", "editor_model": "gpt-6.1-sol", "api_key": "test"}
+        self.assertEqual(setup.validate_step(config, "run"), {})
+        config["max_turns"] = "   "
+        self.assertEqual(setup.validate_step(config, "run"), {})
+        self.assertIsNone(setup.normalize_config(config)["max_turns"])
+        config["max_turns"] = 75
+        self.assertEqual(setup.validate_step(config, "run"), {})
+        config["reasoning_effort"] = "none"
+        self.assertIn("reasoning_effort", setup.validate_step(config, "run"))
+        self.assertIsNone(setup.normalize_config({"max_turns": ""})["max_turns"])
+
     def config(self):
         return {**setup.preset_config("greetings"), "editor": "openai", "editor_model": "gpt-6.1-sol",
                 "api_key": "editor-secret", "hf_token": "hub-secret"}
@@ -142,6 +160,19 @@ class SetupTests(unittest.TestCase):
         self.assertIn("examples[].answer", setup.suggested_objective("factual", "paired", "examples[].answer"))
         self.assertIn("documents[].text", setup.suggested_objective("style", "corpus", text_field="documents[].text"))
         self.assertNotIn("reference", setup.suggested_objective("custom", "prompts").lower())
+
+    def test_task_choice_and_patch_preferences_are_explicit(self):
+        config = self.config()
+        self.assertEqual(config["hf_task"], "text-generation")
+        self.assertFalse(config["patch_backup"])
+        self.assertEqual(config["save_format"], "model")
+        self.assertIn("hf_task", setup.validate_step({**config, "hf_task": None}, "data"))
+        self.assertNotEqual(setup.fingerprint(config), setup.fingerprint({**config, "hf_task": "translation"}))
+        self.assertIn("patch_repo", setup.validate_step({**config, "patch_backup": True}, "editor"))
+        self.assertEqual(setup.validate_step({**config, "patch_backup": True, "patch_repo": "visitor/patches"}, "editor"), {})
+        self.assertIn("patch_repo", setup.validate_step({**config, "patch_backup": "true", "patch_repo": "visitor/patches"}, "editor"))
+        self.assertIn("Patches only", setup.review_html({**config, "save_format": "patch"}))
+        self.assertNotIn("<script>", setup.task_help({"warning": "<script>unsafe</script>"}))
 
 
 ROOT = Path(__file__).resolve().parents[2]

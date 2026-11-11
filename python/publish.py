@@ -194,6 +194,65 @@ class Prepared:
         self.close()
 
 
+_CARD_START = "<!-- vespasian:model-card:start -->"
+_CARD_END = "<!-- vespasian:model-card:end -->"
+_PROJECT = "https://chrisvoncsefalvay.github.io/vespasian/"
+# V mark and colours from site/assets/favicon.svg.
+_BADGE = '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="36" viewBox="0 0 240 36" role="img" aria-label="Created with Vespasian"><rect width="240" height="36" rx="6" fill="#14181b"/><path d="M9 9 19 27 29 9M15 9l4 8 4-8" fill="none" stroke="#d5a278" stroke-width="2"/><text x="39" y="23" font-family="sans-serif" font-size="15" fill="#f5eee7">Created with Vespasian</text></svg>'
+
+def _card_base_models(card: str) -> set[str]:
+    """Read only frontmatter, with safe YAML parsing (a Hub runtime dependency)."""
+    match = re.match(r"\A(?:\ufeff)?---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", card, re.DOTALL)
+    if match is None:
+        if card.lstrip("\ufeff").startswith("---"):
+            raise PublishError("Existing model card frontmatter cannot be verified; review it before uploading")
+        return set()
+    try:
+        import yaml
+        metadata = yaml.safe_load(match.group(1))
+        if metadata is None:
+            return set()
+        if not isinstance(metadata, dict):
+            raise ValueError("Not a mapping")
+        value = metadata.get("base_model")
+        if value is None:
+            return set()
+        values = value if isinstance(value, list) else [value]
+        if any(not isinstance(item, str) or not item.strip() for item in values):
+            raise ValueError("Invalid base model metadata")
+        return set(values)
+    except Exception:
+        raise PublishError("Model card base_model metadata cannot be verified; review it before uploading") from None
+
+
+def _merge_card(existing: str, generated: str) -> str:
+    """Preserve author metadata/prose; replace only our explicitly owned section."""
+    existing_bases = _card_base_models(existing)
+    generated_bases = _card_base_models(generated)
+    if existing_bases and existing_bases != generated_bases:
+        raise PublishError("Existing model card base_model metadata does not match the checkpoint's verified base model. Choose a different repository or review and correct the existing card before uploading")
+    section = generated[generated.index(_CARD_START):]
+    if _CARD_START not in existing and _CARD_END not in existing:
+        return existing + "\n\n" + section
+    if existing.count(_CARD_START) != 1 or existing.count(_CARD_END) != 1:
+        raise PublishError("Existing model card has ambiguous Vespasian sections; review it before uploading")
+    start, end = existing.index(_CARD_START), existing.index(_CARD_END)
+    if end < start:
+        raise PublishError("Existing model card has malformed Vespasian section markers")
+    return existing[:start] + section.rstrip("\n") + existing[end + len(_CARD_END):]
+
+def _download_card(api: Any, repo: str, revision: str) -> str:
+    try:
+        from huggingface_hub import hf_hub_download
+        path = Path(hf_hub_download(repo_id=repo, filename="README.md", repo_type="model",
+                                    revision=revision, token=api.token))
+        if path.stat().st_size > 2 * 1024 * 1024:
+            raise ValueError("Oversized card")
+        return path.read_text(encoding="utf-8")
+    except Exception:
+        raise PublishError("Could not read the existing model card; upload stopped to preserve it") from None
+
+
 def prepare(run: Path, repo: str) -> Prepared:
     """Create a private upload snapshot after verifying the complete local receipt."""
     _repo_id(repo)
@@ -286,8 +345,22 @@ def prepare(run: Path, repo: str) -> Prepared:
         version = settings.get("version")
         if not isinstance(version, str) or not re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?", version):
             version = None
+        target_categories = {"factual": "Factual answers", "style": "Style and tone",
+                             "format": "Response format", "classification": "Classification",
+                             "custom": "Custom behaviour"}
+        target_category = target_categories.get(settings.get("target_type"), "Not reported")
+        tables = model.get("token_tables")
+        table_info = None
+        if isinstance(tables, list) and all(isinstance(t, dict) and isinstance(t.get("tied"), bool) for t in tables):
+            table_info = {"available_tables": len(tables), "tied_input_output_tables": sum(t["tied"] for t in tables)}
+        hf_task = settings.get("hf_task")
+        if hf_task not in {"text-generation", "text-classification", "question-answering", "summarization", "translation"}:
+            hf_task = None
         provenance = {
+            "hf_task": hf_task,
             "vespasian_version": version,
+            "target_category": target_category,
+            "token_table_catalogue": table_info,
             "base_model": base_model,
             "source_revision": _hex(model.get("revision"), (40, 64)),
             "dataset_sha256": _hex(settings.get("dataset_sha256")),
@@ -300,16 +373,20 @@ def prepare(run: Path, repo: str) -> Prepared:
         }
         (destination / "vespasian-results.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
         (destination / "vespasian-provenance.json").write_text(json.dumps(provenance, indent=2, sort_keys=True) + "\n")
-        header = ["---", "library_name: transformers", "tags:", "- vespasian", "- model-editing"]
+        published_config = _read_json(destination / "config.json")
+        pipeline_tag = "image-text-to-text" if published_config.get("model_type") == "qwen3_5" else "text-generation"
+        header = ["---", "library_name: transformers", f"pipeline_tag: {pipeline_tag}", "tags:", "- vespasian", "- model-editing"]
         if base_model:
-            header.append(f"base_model: {base_model}")
-        header += ["---", "", f"# {repo.split('/')[-1]}", "", "A checkpoint selected by Vespasian's direct weight search.", "",
+            header.append(f"base_model: {json.dumps(base_model)}")
+        header += ["---", "", _CARD_START, "", f"[![Created with Vespasian](vespasian-badge.svg)]({_PROJECT})", "", f"# {repo.split('/')[-1]}", "", "A checkpoint selected by Vespasian's direct weight search.", "",
                    f"The search retained {summary['accepted_turns']} changes across {summary['turns']} proposals. The saved checkpoint was reloaded and verified.", "",
-                   "| Split | Examples | Final score |", "| --- | ---: | ---: |"]
+                   "| Split | Baseline examples | Baseline score | Final examples | Final score |", "| --- | ---: | ---: | ---: | ---: |"]
         for split in ("edit", "validation", "preserve", "test"):
             values = summary["final_metrics"].get(split, {})
-            if metric in values and "count" in values:
-                header.append(f"| {split} | {values['count']} | {values[metric]:.6f} |")
+            baseline = summary["baseline_metrics"].get(split, {})
+            before = f"{baseline[metric]:.6f}" if metric in baseline else "not reported"
+            after = f"{values[metric]:.6f}" if metric in values else "not reported"
+            header.append(f"| {split} | {baseline.get('count', 'not reported')} | {before} | {values.get('count', 'not reported')} | {after} |")
         header += ["", f"Objective: `{metric}`.", "", "[Measurements](vespasian-results.json) · [Provenance and hashes](vespasian-provenance.json)", ""]
         if controls is not None:
             retention = "not measured" if controls["retention"] is None else f"{controls['retention']:.6f}"
@@ -322,6 +399,25 @@ def prepare(run: Path, repo: str) -> Prepared:
                 before = f"{baseline:.6f}" if baseline is not None else "—"
                 header.append(f"| {check} | {values['count']} | {before} | {values['score']:.6f} |")
             header.append("")
+        header += ["## Intended use and edit process", "",
+                   f"Experimental text generation with a targeted behavioural edit. Behaviour category: {target_category}. The private user objective, prompts, examples and editor conversation are deliberately not published.",
+                   f"Dataset mode: {provenance['dataset_mode'] or 'not reported'}. Hugging Face task (text adaptation): {hf_task or 'not reported'}. The objective score is {metric}; it is not a general capability or safety rating.",
+                   "Reported evaluations use text only; retaining a multimodal architecture does not verify its other capabilities.",
+                   "Vespasian assesses the starting model, proposes bounded direct weight changes, measures candidate behaviour, retains selected changes and reloads the saved checkpoint for verification. Proposal counts do not imply independent improvements.",
+                   "Token-row editing, when used, changes existing vocabulary rows rather than adding tokens. Shared input/output weights can make a single row edit affect both roles. No raw token selections are published.",
+                   "", "## Provenance", "",
+                   f"Base model: {base_model or 'not publicly identified'}.",
+                   f"Source revision: {provenance['source_revision'] or 'not reported'}.",
+                   f"Vespasian version: {version or 'not reported'}.",
+                   "", "## Evaluation limits", "",
+                   "Reload verification confirms checkpoint reload consistency, not broad correctness or safety. Missing measurements are not zero scores. Validation selection can overfit; held-out test and preservation results above are only evidence for the supplied examples.",
+                   "Final scoring completed." if summary["final_scoring_complete"] else "WARNING: final scoring was incomplete; available measurements must not be treated as a complete final evaluation.",
+                   "Health checks and controls, when reported, cover only the monitoring examples. This card does not establish suitability for consequential decisions or production deployment.",
+                   "Review the base model's licence, restrictions and documentation before use. No new licence or permission is inferred by this card.",
+                   "", _CARD_END, ""]
+        if table_info is not None:
+            header[-2:-2] = [f"Inspected token-table catalogue: {table_info['available_tables']} available tables, including {table_info['tied_input_output_tables']} tied input/output tables. This describes available edit targets, not evidence that a token-row edit was applied.", ""]
+        (destination / "vespasian-badge.svg").write_text(_BADGE + "\n", encoding="utf-8")
         (destination / "README.md").write_text("\n".join(header), encoding="utf-8")
         files = [{"path": str(path.relative_to(destination)), "sha256": _sha(path), "bytes": path.stat().st_size}
                  for path in sorted(destination.rglob("*")) if path.is_file()]
@@ -358,7 +454,7 @@ def _visibility(info: Any, private: bool):
         raise PublishError("The existing repository visibility does not match the requested visibility")
 
 
-def _obsolete_weights(api: Any, repo: str, info: Any, new_names: set[str]) -> list[str]:
+def _obsolete_weights(api: Any, repo: str, info: Any, new_names: set[str], prepared: Prepared) -> list[str]:
     """Remove only conflicting standard weight files, pinned to the inspected head."""
     parent = _hex(getattr(info, "sha", None), (40, 64))
     try:
@@ -367,6 +463,15 @@ def _obsolete_weights(api: Any, repo: str, info: Any, new_names: set[str]) -> li
         raise PublishError("Could not inspect the existing model files. Check repository access and network connectivity") from None
     if not isinstance(names, list) or any(not isinstance(name, str) for name in names):
         raise PublishError("The Hub did not return a valid model file listing")
+    if "README.md" in names:
+        if parent is None:
+            raise PublishError("Cannot safely preserve the existing model card without a verified repository revision")
+        existing = _download_card(api, repo, parent)
+        path = prepared.directory / "README.md"
+        path.write_text(_merge_card(existing, path.read_text(encoding="utf-8")), encoding="utf-8")
+        for item in prepared.files:
+            if item["path"] == "README.md":
+                item.update(sha256=_sha(path), bytes=path.stat().st_size)
     standard = {"model.safetensors", "model.safetensors.index.json", "pytorch_model.bin", "pytorch_model.bin.index.json"}
     def weight(name):
         return name in standard or bool(re.fullmatch(r"(?:model-\d{5}-of-\d{5}\.safetensors|pytorch_model-\d{5}-of-\d{5}\.bin)", name))
@@ -403,7 +508,7 @@ def publish(*, run: Path, repo: str, visibility: str, create: bool = False,
         if info is None:
             raise PublishError("The model repository disappeared before upload")
         _visibility(info, private)
-        obsolete = _obsolete_weights(api, repo, info, {item["path"] for item in prepared.files})
+        obsolete = _obsolete_weights(api, repo, info, {item["path"] for item in prepared.files}, prepared)
         operations = [operation(path_in_repo=item["path"], path_or_fileobj=prepared.directory / item["path"])
                       for item in prepared.files]
         if obsolete:

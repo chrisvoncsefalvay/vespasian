@@ -16,31 +16,31 @@ import gradio as gr
 import hub
 import runtime
 import setup_helpers as setup
-from gpu import dispatch, model_availability
+from gpu import dispatch, model_availability, model_options
 from ui import ASSET_DIR, CSS, JS, THEME, build_ui, render_dashboard
 
 ROOT = Path(__file__).resolve().parent
 FIELDS = (
-    "target_type", "model", "dataset_location", "dataset_source", "dataset_file",
+    "target_type", "hf_task", "save_format", "prompt_format", "patch_backup", "patch_repo", "patch_create", "model", "dataset_location", "dataset_source", "dataset_file",
     "dataset_config", "dataset_split", "dataset_mode", "prompt_field", "target_field", "text_field",
     "example_limit", "test_dataset_source", "test_dataset_config", "test_dataset_split", "test_example_limit",
     "goal", "controls", "metric", "editor", "editor_model", "api_key", "hf_token", "budget", "max_turns",
     "max_new_tokens", "health_checks", "health_count", "health_policy", "health_limit_pp", "save_trajectory",
-    "input_price", "output_price",
+    "input_price", "output_price", "reasoning_effort",
 )
 PREVIEW_FIELDS = (
-    "dataset_location", "dataset_source", "dataset_file", "dataset_config", "dataset_split", "dataset_mode",
+    "hf_task", "dataset_location", "dataset_source", "dataset_file", "dataset_config", "dataset_split", "dataset_mode",
     "prompt_field", "target_field", "text_field", "example_limit", "hf_token",
     "test_dataset_source", "test_dataset_config", "test_dataset_split", "test_example_limit",
 )
 STEP_FIELDS = {
-    "goal": "vs-goal", "target_type": "vs-target-type", "metric": "vs-metric", "dataset_mode": "vs-dataset-mode",
+    "patch_repo": "vs-patch-backup", "hf_task": "vs-hf-task", "save_format": "vs-step-editor", "prompt_format": "vs-step-editor", "goal": "vs-goal", "target_type": "vs-target-type", "metric": "vs-metric", "dataset_mode": "vs-dataset-mode",
     "model": "vs-model", "dataset_source": "vs-dataset-source", "dataset_file": "vs-dataset-file",
     "dataset_config": "vs-dataset-config", "dataset_split": "vs-dataset-split", "example_limit": "vs-example-limit",
     "preview": "vs-preview-button", "preview_state": "vs-preview-button", "test_preview": "vs-test-preview-button",
     "test_dataset_source": "vs-test-source", "prompt_field": "vs-prompt-field", "target_field": "vs-target-field",
     "text_field": "vs-text-field", "editor": "vs-editor", "editor_model": "vs-editor-model", "api_key": "vs-api-key",
-    "budget": "vs-budget", "max_turns": "vs-max-turns", "health_checks": "vs-health-checks",
+    "reasoning_effort": "vs-reasoning-effort", "budget": "vs-budget", "max_turns": "vs-max-turns", "health_checks": "vs-health-checks",
     "health_count": "vs-health-count", "health_limit_pp": "vs-health-limit", "health_policy": "vs-health-policy",
     "input_price": "vs-input-price", "output_price": "vs-output-price",
 }
@@ -74,7 +74,7 @@ def parse_selection(raw, previous=None):
     result = dict(DEFAULT_SELECTION)
     if isinstance(previous, dict):
         result.update({key: previous[key] for key in result if key in previous})
-    if value.get("turn") is None or isinstance(value.get("turn"), int) and not isinstance(value.get("turn"), bool) and 0 <= value["turn"] <= 50:
+    if value.get("turn") is None or isinstance(value.get("turn"), int) and not isinstance(value.get("turn"), bool) and 0 <= value["turn"] <= 4294967295:
         if "turn" in value:
             result["turn"] = value["turn"]
     for key, choices in (("split", {"all", "edit", "validation", "test", "health"}), ("outcome", {"all", "improved", "regressed", "changed"})):
@@ -93,7 +93,7 @@ def create_app():
     choices = [entry["id"] for entry in available if entry["available"]]
     if not choices and os.environ.get("VESPASIAN_SPACE_SKIP_MODEL_LOAD") == "1":
         choices = ["Qwen/Qwen3.5-0.8B", "google/gemma-3-1b-it"]
-    controls["model"].choices = [(name, name) for name in choices]
+    controls["model"].choices = [(label, name) for label, name in model_options() if name in choices]
     controls["model"].value = choices[0] if choices else None
     demo.vespasian_controls = controls
 
@@ -116,10 +116,21 @@ def create_app():
         message = "Sign in or refresh your account to load your datasets." if kind == "account" and not entries else "No datasets inspected in this session yet." if kind == "recent" and not entries else ""
         return gr.update(choices=entries), f'<p class="vs-inline-note">{message}</p>'
 
-    def search(query, override, oauth_token: gr.OAuthToken | None):
+    def model_task_hint(model, override, oauth_token: gr.OAuthToken | None):
         token = hub.token_for(oauth_token, override)
         try:
-            results = hub.search_datasets(query, token=token)
+            metadata = hub.model_task_metadata(model, token=token)
+            suggested = metadata.get("model_suggested_tasks") or []
+            text = ("Model tags suggest " + ", ".join(suggested) + ". Confirm the task against your dataset; tags do not prove editing support."
+                    if suggested else "Model task tags are missing or unsupported. Choose the task explicitly and inspect your dataset.")
+            return '<p class="vs-inline-note">' + html.escape(text) + '</p>'
+        except Exception as error:
+            return '<p class="vs-inline-note">Model tags could not be checked. Choose the task explicitly. ' + html.escape(safe_error(error, token)) + '</p>'
+
+    def search(query, task, include_untagged, override, oauth_token: gr.OAuthToken | None):
+        token = hub.token_for(oauth_token, override)
+        try:
+            results = hub.search_datasets(query, token=token, hf_task=None if include_untagged else task)
             return gr.update(choices=results), f'<p class="vs-inline-note">{len(results)} public datasets found. Choose one to inspect its fields.</p>'
         except Exception as error:
             return gr.skip(), f'<p class="vs-preview-note" role="alert">{html.escape(safe_error(error, token))}</p>'
@@ -149,6 +160,9 @@ def create_app():
             else:
                 result = hub.preview(config, token)
             updated = dict(config)
+            metadata = result.get("task_metadata") or {}
+            if metadata.get("selected_task"):
+                updated["hf_task"] = metadata["selected_task"]
             for name, key in (("dataset_config", "config"), ("dataset_split", "split"), ("prompt_field", "prompt_field"), ("target_field", "target_field"), ("text_field", "text_field")):
                 if result.get(key):
                     updated[name] = result[key]
@@ -161,6 +175,7 @@ def create_app():
                 recent = [source, *[item for item in recent if item != source]][:12]
             response = {
                 controls["preview_html"]: hub.preview_html(result), controls["preview_state"]: result,
+                controls["hf_task"]: updated.get("hf_task"), controls["task_help"]: setup.task_help(metadata),
                 controls["dataset_config"]: gr.update(choices=result.get("configs", []), value=updated.get("dataset_config")),
                 controls["dataset_split"]: gr.update(choices=result.get("splits", ["train", "validation", "test"]), value=updated.get("dataset_split")),
                 **{controls[name]: gr.update(choices=paths, value=updated.get(name) or None) for name in ("prompt_field", "target_field", "text_field")},
@@ -218,11 +233,16 @@ def create_app():
     def display_run(run, state, selection=None):
         selection = getattr(run, "view_selection", None) if isinstance(getattr(run, "view_selection", None), dict) else selection
         finished = state["finished"]
-        has_checkpoint = finished and (run.output / "report.json").is_file() and not state["error"]
+        has_checkpoint = finished and (run.output / "checkpoint").is_dir() and (run.output / "report.json").is_file() and not state["error"]
+        patch_archive = getattr(run, "patch_archive", None)
+        patch_archive = patch_archive if isinstance(patch_archive, Path) and patch_archive.is_file() else None
+        has_patches = finished and (run.output / "patches").is_dir()
         has_trajectory = finished and (run.output / "trajectory.jsonl").is_file()
         return {
             controls["state"]: state, controls["dashboard_html"]: render_dashboard(state, selection),
             controls["status"]: state["error"] or state["status"],
+            controls["patch_download"]: gr.update(value=str(patch_archive) if patch_archive else None, visible=bool(patch_archive)),
+            controls["publish_patches_button"]: gr.update(interactive=has_patches),
             controls["download"]: gr.update(value=str(run.archive) if run.archive else None, visible=bool(run.archive)),
             controls["run_button"]: gr.update(interactive=finished), controls["stop_button"]: gr.update(interactive=not finished),
             controls["publish_model_button"]: gr.update(interactive=has_checkpoint), controls["publish_trajectory_button"]: gr.update(interactive=has_trajectory),
@@ -234,12 +254,14 @@ def create_app():
     def start(values, request: gr.Request, oauth_token: gr.OAuthToken | None):
         config = collect(values)
         preview, test = current_preview(config), current_preview(config, True)
-        for step in ("behaviour", "data", "editor"):
+        for step in ("target", "behaviour", "data", "editor"):
             errors = setup.validate_step(config, step, preview, test)
             if errors:
                 return {controls[f"error_{step}"]: error_html(errors), controls["setup_tabs"]: gr.update(selected=step), controls["run_button"]: gr.update(interactive=True)}
         token = hub.token_for(oauth_token, config.pop("hf_token", ""))
         try:
+            if config.get("patch_backup") and not token:
+                raise ValueError("Sign in or provide a session Hugging Face token to authorize private patch backup")
             config = setup.normalize_config(config)
             config = {key: value for key, value in config.items() if key in set(FIELDS) | {"health_max_drop"}}
             run = runtime.begin(request.session_hash, config, token)
@@ -249,7 +271,7 @@ def create_app():
             return {controls["error_review"]: error_html({"goal": safe_error(error, token, config.get("api_key"))}), controls["setup_tabs"]: gr.update(selected="review"), controls["run_button"]: gr.update(interactive=True)}
         result = display_run(run, run.state(), DEFAULT_SELECTION)
         result[controls["selection"]] = dict(DEFAULT_SELECTION)
-        for step in ("behaviour", "data", "editor", "review"):
+        for step in ("target", "behaviour", "data", "editor", "review"):
             result[controls[f"error_{step}"]] = ""
         return result
 
@@ -282,7 +304,23 @@ def create_app():
         run = runtime.get_run(request.session_hash, state)
         if not run.finished:
             return gr.skip(), gr.skip(), gr.skip()
-        return gr.update(visible=True), gr.update(visible=False), gr.update(selected="behaviour")
+        return gr.update(visible=True), gr.update(visible=False), gr.update(selected="target")
+
+    def publish_patches(state, repo, consent, create, override, request: gr.Request, oauth_token: gr.OAuthToken | None):
+        token = hub.token_for(oauth_token, override)
+        try:
+            run = runtime.get_run(request.session_hash, state)
+            if not run.finished:
+                raise ValueError("Wait for the run to finish before manually saving patches")
+            if consent is not True:
+                raise ValueError("Explicitly authorize sharing patches with the named private repository")
+            if not token:
+                raise ValueError("Sign in or provide a session token to save patches privately")
+            repo = (repo or "").strip()
+            hub.core_module("patches").publish_private(run.output / "patches", repo, token, consent=consent, create=create)
+            return f"Saved private patches to [huggingface.co/{repo}](https://huggingface.co/{repo})"
+        except Exception as error:
+            return "Patch save stopped: " + safe_error(error, token)
 
     def publish_model(state, repo, visibility, create, override, request: gr.Request, oauth_token: gr.OAuthToken | None):
         return publish(state, repo, visibility, create, override, request, oauth_token, "model")
@@ -334,20 +372,21 @@ def create_app():
 
     def preset_changed(name):
         config = setup.preset_config(name) if name else {}
-        updates = {controls[key]: value for key, value in config.items() if key in controls}
+        updates = {controls[key]: value for key, value in config.items() if key in controls and key != "model"}
         updates.update({controls["preview_state"]: {}, controls["test_preview_state"]: {}, controls["preview_html"]: hub.stale_preview_html("Edit/validation"), controls["test_preview_html"]: hub.stale_preview_html("Held-out test")})
         return updates
 
     with demo:
         all_inputs = {controls[name] for name in (*FIELDS, "preview_state", "test_preview_state")}
-        navigation_outputs = [controls[name] for name in ("setup_tabs", "review_html", "error_behaviour", "error_data", "error_editor", "error_review")]
-        for button, step, destination in (("next_data", "behaviour", "data"), ("next_editor", "data", "editor"), ("next_review", "editor", "review")):
+        navigation_outputs = [controls[name] for name in ("setup_tabs", "review_html", "error_target", "error_behaviour", "error_data", "error_editor", "error_review")]
+        for button, step, destination in (("next_behaviour", "target", "behaviour"), ("next_data", "behaviour", "data"), ("next_editor", "data", "editor"), ("next_review", "editor", "review")):
             def proceed(values, step=step, destination=destination):
                 return navigation(values, step, destination)
             controls[button].click(proceed, inputs=all_inputs, outputs=navigation_outputs, queue=False, api_name=False)
-        for button, destination in (("back_behaviour", "behaviour"), ("back_data", "data"), ("back_editor", "editor")):
+        for button, destination in (("back_target", "target"), ("back_behaviour", "behaviour"), ("back_data", "data"), ("back_editor", "editor")):
             controls[button].click(lambda destination=destination: gr.update(selected=destination), outputs=controls["setup_tabs"], queue=False, api_name=False)
         controls["setup_tabs"].select(review, inputs=all_inputs, outputs=controls["review_html"], queue=False, api_name=False)
+        controls["model"].input(model_task_hint, inputs=[controls["model"], controls["hf_token"]], outputs=controls["task_help"], api_name=False, concurrency_limit=4)
         controls["preset"].input(preset_changed, inputs=controls["preset"], outputs=[controls[name] for name in (*FIELDS, "preview_state", "test_preview_state", "preview_html", "test_preview_html")], queue=False, api_name=False)
         controls["dataset_mode"].change(mode_changed, inputs=[controls[name] for name in ("dataset_mode", "metric", "target_type")], outputs=[controls[name] for name in ("metric", "prompt_field", "target_field", "text_field", "mode_help", "target_type")], queue=False, api_name=False)
         controls["metric"].change(metric_help, inputs=controls["metric"], outputs=controls["metric_help"], queue=False, api_name=False)
@@ -369,25 +408,26 @@ def create_app():
         controls["refresh_datasets"].click(account, inputs=[controls["hf_token"]], outputs=account_outputs, api_name=False).then(lambda owned: gr.update(choices=owned), inputs=controls["account_choices"], outputs=controls["dataset_source"], queue=False, api_name=False)
         controls["dataset_catalog"].input(catalog, inputs=[controls[name] for name in ("dataset_catalog", "account_choices", "recent_datasets")], outputs=[controls["dataset_source"], controls["catalog_status"]], queue=False, api_name=False)
         for event in (controls["search_datasets"].click, controls["dataset_query"].submit):
-            event(search, inputs=[controls["dataset_query"], controls["hf_token"]], outputs=[controls["dataset_source"], controls["catalog_status"]], api_name=False, concurrency_limit=4)
+            event(search, inputs=[controls[name] for name in ("dataset_query", "hf_task", "include_untagged", "hf_token")], outputs=[controls["dataset_source"], controls["catalog_status"]], api_name=False, concurrency_limit=4)
         preview_inputs = {controls[name] for name in (*PREVIEW_FIELDS, "recent_datasets")}
-        controls["preview_button"].click(inspect_dataset, inputs=preview_inputs, outputs=[controls[name] for name in ("preview_html", "dataset_config", "dataset_split", "prompt_field", "target_field", "text_field", "preview_state", "split_summary", "recent_datasets", "preview_tabs", "test_preview_html", "test_preview_state")], api_name="preview_dataset", concurrency_limit=4)
+        controls["preview_button"].click(inspect_dataset, inputs=preview_inputs, outputs=[controls[name] for name in ("preview_html", "hf_task", "task_help", "dataset_config", "dataset_split", "prompt_field", "target_field", "text_field", "preview_state", "split_summary", "recent_datasets", "preview_tabs", "test_preview_html", "test_preview_state")], api_name="preview_dataset", concurrency_limit=4)
         controls["test_preview_button"].click(inspect_test, inputs=preview_inputs, outputs=[controls[name] for name in ("test_preview_html", "test_dataset_config", "test_dataset_split", "test_preview_state", "preview_tabs")], api_name="preview_test_dataset", concurrency_limit=4)
         for name in ("dataset_location", "dataset_source", "dataset_config", "dataset_split", "dataset_file", "example_limit"):
             event = controls[name].change if name == "dataset_file" else controls[name].input
             event(invalidate(), outputs=[controls["preview_html"], controls["preview_state"]], queue=False, api_name=False)
         for name in ("test_dataset_source", "test_dataset_config", "test_dataset_split", "test_example_limit"):
             controls[name].input(invalidate(test=True), outputs=[controls["test_preview_html"], controls["test_preview_state"]], queue=False, api_name=False)
-        for name in ("dataset_mode", "prompt_field", "target_field", "text_field", "hf_token"):
+        for name in ("hf_task", "dataset_mode", "prompt_field", "target_field", "text_field", "hf_token"):
             controls[name].input(invalidate(both=True), outputs=[controls[field] for field in ("preview_html", "preview_state", "test_preview_html", "test_preview_state")], queue=False, api_name=False)
         controls["example_limit"].input(lambda values: split_html(collect(values)), inputs=all_inputs, outputs=controls["split_summary"], queue=False, api_name=False)
-        run_outputs = [controls[name] for name in ("state", "dashboard_html", "status", "download", "run_button", "stop_button", "publish_model_button", "publish_trajectory_button", "setup_panel", "monitor_panel", "results_panel", "new_experiment", "return_results", "setup_tabs", "selection", "error_behaviour", "error_data", "error_editor", "error_review", "run_timer")]
+        run_outputs = [controls[name] for name in ("state", "dashboard_html", "status", "download", "run_button", "stop_button", "publish_model_button", "publish_trajectory_button", "setup_panel", "monitor_panel", "results_panel", "new_experiment", "return_results", "setup_tabs", "selection", "error_target", "error_behaviour", "error_data", "error_editor", "error_review", "patch_download", "publish_patches_button", "run_timer")]
         controls["run_button"].click(start, inputs=all_inputs, outputs=run_outputs, api_name="run", concurrency_limit=runtime.MAX_ACTIVE)
         controls["run_timer"].tick(advance, inputs=[controls["state"], controls["selection"]], outputs=run_outputs, api_name="advance", api_visibility="undocumented", queue=True, trigger_mode="once", show_progress="hidden", concurrency_limit=runtime.MAX_ACTIVE, concurrency_id="gpu-allocations")
         controls["selection_submit"].click(select_turn, inputs=[controls[name] for name in ("state", "selection_input", "selection")], outputs=[controls["selection"], controls["dashboard_html"]], queue=False, api_name=False, show_progress="hidden")
         controls["stop_button"].click(stop, inputs=controls["state"], outputs=controls["status"], queue=False, api_name=False)
         controls["new_experiment"].click(new_experiment, inputs=controls["state"], outputs=[controls["setup_panel"], controls["monitor_panel"], controls["setup_tabs"]], queue=False, api_name=False)
         controls["return_results"].click(lambda: (gr.update(visible=False), gr.update(visible=True)), outputs=[controls["setup_panel"], controls["monitor_panel"]], queue=False, api_name=False)
+        controls["publish_patches_button"].click(publish_patches, inputs=[controls[name] for name in ("state", "patch_save_repo", "patch_save_consent", "patch_save_create", "hf_token")], outputs=controls["publish_status"], api_name=False, concurrency_limit=2)
         for kind, callback in (("model", publish_model), ("trajectory", publish_trajectory)):
             controls[f"publish_{kind}_button"].click(callback, inputs=[controls[name] for name in ("state", f"{kind}_repo", f"{kind}_visibility", f"{kind}_create", "hf_token")], outputs=controls["publish_status"], api_name=False, concurrency_limit=2)
     return demo

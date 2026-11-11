@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 import queue
@@ -25,7 +26,7 @@ LOCK = threading.Lock()
 MAX_ACTIVE = int(os.environ.get("VESPASIAN_SPACE_CONCURRENT_RUNS", "2"))
 RETENTION_SECONDS = 2 * 60 * 60
 CLIENT_TIMEOUT_SECONDS = 5 * 60
-PUBLIC_FIELDS = {"model", "goal", "controls", "budget", "max_turns", "metric", "target_type",
+PUBLIC_FIELDS = {"hf_task", "save_format", "prompt_format", "patch_backup", "patch_repo", "model", "goal", "controls", "budget", "max_turns", "reasoning_effort", "metric", "target_type",
                  "dataset_mode", "editor", "editor_model", "health_checks", "health_count", "health_max_drop", "max_new_tokens"}
 REPORT_FIELDS = {"baseline_metrics", "best_metrics", "final_metrics", "baseline_health", "best_health",
                  "final_health", "best_turn", "metric", "stop_reason", "reload_verified", "checkpoint",
@@ -54,6 +55,15 @@ def child_environment(root, bridge, *, token=False, api_key="", editor="openai")
 
 
 def validate(config):
+    for name in ("patch_backup", "patch_create"):
+        if not isinstance(config.get(name, False), bool):
+            raise ValueError("Private patch backup requires explicit boolean choices")
+    if config.get("save_format", "model") not in {"patch", "model"}:
+        raise ValueError("Choose patch or model output")
+    if config.get("prompt_format", "auto") not in {"auto", "chat", "plain"}:
+        raise ValueError("Choose auto, chat or plain prompt format")
+    if config.get("patch_backup") and not str(config.get("patch_repo") or "").strip():
+        raise ValueError("Name the authorized private patch repository")
     if not str(config.get("goal") or "").strip():
         raise ValueError("Set an editing objective")
     if config.get("editor") not in {"openai", "anthropic"}:
@@ -63,10 +73,16 @@ def validate(config):
     if not 0.01 <= float(config.get("budget", 0)) <= 100:
         raise ValueError("Set an inference budget between $0.01 and $100")
     for name, minimum, maximum in (("example_limit", 5, 128), ("test_example_limit", 1, 128),
-                                   ("max_turns", 1, 50), ("max_new_tokens", 1, 128), ("health_count", 1, 16)):
+                                   ("max_new_tokens", 1, 128), ("health_count", 1, 16)):
         value = config.get(name, minimum)
-        if not isinstance(value, (int, float)) or int(value) != value or not minimum <= value <= maximum:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or int(value) != value or not minimum <= value <= maximum:
             raise ValueError(f"{name.replace('_', ' ').capitalize()} must be between {minimum} and {maximum}")
+    turns = config.get("max_turns")
+    if turns is not None and (isinstance(turns, bool) or not isinstance(turns, (int, float))
+                              or not math.isfinite(turns) or int(turns) != turns or not 1 <= turns <= 4294967295):
+        raise ValueError("Maximum edit turns must be blank or a positive whole number up to 4294967295")
+    if config.get("reasoning_effort", "low") not in {"low", "medium", "high"}:
+        raise ValueError("Choose a supported reasoning effort")
     if len(config.get("health_checks") or []) > 4:
         raise ValueError("Choose up to four health checks for this run")
     drop = config.get("health_max_drop")
@@ -88,8 +104,19 @@ def command(config, data, output, revision):
             "--dataset-mode", config.get("dataset_mode", "paired"),
             "--metric", config.get("metric", "auto"),
             "--editor", config["editor"], "--editor-model", config["editor_model"],
-            "--budget", str(config["budget"]), "--max-turns", str(int(config["max_turns"])),
-            "--max-new-tokens", str(int(config["max_new_tokens"])), "--max-seq-length", "1024"]
+            "--budget", str(config["budget"]), "--budget-policy", "strict",
+            "--reasoning-effort", config.get("reasoning_effort", "low"),
+            "--max-new-tokens", str(int(config["max_new_tokens"])), "--max-seq-length", "1024",
+            "--seed", "42", "--max-output-tokens", "2048", "--preserve-tolerance", "0"]
+    args.extend(["--save-format", config.get("save_format", "model"), "--prompt-format", config.get("prompt_format", "auto")])
+    if config.get("patch_backup"):
+        args.extend(["--patch-backup", "--patch-repo", config["patch_repo"]])
+        if config.get("patch_create"):
+            args.append("--patch-create")
+    if config.get("hf_task"):
+        args.extend(["--task", config["hf_task"]])
+    if config.get("max_turns") is not None:
+        args.extend(["--max-turns", str(int(config["max_turns"]))])
     for check in config.get("health_checks") or []:
         args.extend(["--health-check", f"{check}:{int(config['health_count'])}"])
     if config.get("health_max_drop") is not None:
@@ -121,6 +148,7 @@ class Run:
         self.finished = False
         self.finished_at = None
         self.archive = None
+        self.patch_archive = None
         self.report = {}
         self.messages = queue.Queue()
         self.diagnostics = []
@@ -211,6 +239,14 @@ class Run:
             return None
         for receipt in self.root.glob("*-source.json"):
             shutil.copy2(receipt, self.output / receipt.name)
+        journal = self.output / "patches"
+        if journal.is_dir():
+            try:
+                destination = self.root / f"vespasian-{self.id[:10]}-patches.zip"
+                hub.core_module("patches").export_bundle(journal, destination)
+                self.patch_archive = destination
+            except Exception as error:
+                self.error = "The compact patch download could not be packaged: " + self.redact(str(error))
         archive = self.root / f"vespasian-{self.id[:10]}.zip"
         with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as output:
             for path in sorted(self.output.rglob("*")):
@@ -383,6 +419,8 @@ class Run:
 
 def begin(owner, config, token=False):
     validate(config)
+    if config.get("patch_backup") and not token:
+        raise ValueError("Private patch backup requires an explicitly supplied session token")
     cleanup()
     with LOCK:
         if any(run.owner == owner and not run.finished for run in RUNS.values()):

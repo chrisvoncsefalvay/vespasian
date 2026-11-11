@@ -30,7 +30,7 @@ SPACE_FILES = (
     "python_bridge.py",
     "hub.py",
 )
-CORE_FILES = ("worker.py", "dataset.py", "health.py", "publish.py", "trajectory.py")
+CORE_FILES = ("worker.py", "dataset.py", "task_metadata.py", "patches.py", "health.py", "publish.py", "trajectory.py")
 PROVENANCE = "PROVENANCE.json"
 
 

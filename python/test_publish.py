@@ -44,6 +44,8 @@ class PublishTests(unittest.TestCase):
         (self.run / "run.json").write_text(json.dumps({"version": "0.1.1", "dataset_sha256": "c" * 64,
                                                       "dataset_source": "/home/private/dataset.jsonl", "goal": "PRIVATE GOAL"}))
         self.manifest()
+        self.card_download = patch("publish._download_card", return_value="# Existing card").start()
+        self.addCleanup(patch.stopall)
         self.api = Mock()
         self.api.model_info.return_value = SimpleNamespace(private=True, sha=SHA)
         self.api.list_repo_files.return_value = []
@@ -77,6 +79,22 @@ class PublishTests(unittest.TestCase):
         arguments.update(kwargs)
         return publish.publish(**arguments)
 
+    def test_card_pipeline_uses_verified_saved_architecture_and_safe_task(self):
+        self.write("config.json", {"model_type": "qwen3_5", "vision_config": {"model_type": "qwen3_5_vision"}})
+        self.manifest()
+        settings = json.loads((self.run / "run.json").read_text())
+        settings["hf_task"] = "text-classification"
+        (self.run / "run.json").write_text(json.dumps(settings))
+        with publish.prepare(self.run, "owner/model") as prepared:
+            card = (prepared.directory / "README.md").read_text()
+            self.assertIn("pipeline_tag: image-text-to-text", card)
+            self.assertIn("text-classification", card)
+            self.assertIn("evaluations use text only", card)
+        settings["hf_task"] = "PRIVATE UNKNOWN TASK"
+        (self.run / "run.json").write_text(json.dumps(settings))
+        with publish.prepare(self.run, "owner/model") as prepared:
+            self.assertNotIn("PRIVATE UNKNOWN TASK", (prepared.directory / "README.md").read_text())
+
     def test_health_publication_contains_scores_without_monitoring_examples(self):
         health = {"copying": {"label": "PRIVATE LABEL", "score": 0.75, "count": 4, "metric": "exact_text", "samples": ["PRIVATE PROMPT"]}}
         self.report.update({name: health for name in ("baseline_health", "best_health", "final_health")})
@@ -102,7 +120,7 @@ class PublishTests(unittest.TestCase):
         self.assertEqual(self.api.create_commit.call_args.kwargs["parent_commit"], SHA)
         self.api.list_repo_files.assert_called_once_with(repo_id="owner/model", repo_type="model", revision=SHA)
         self.assertEqual(set(self.uploaded), {"config.json", "tokenizer.json", "model.safetensors", "README.md",
-                                             "vespasian-results.json", "vespasian-provenance.json"})
+                                             "vespasian-results.json", "vespasian-provenance.json", "vespasian-badge.svg"})
         self.assertEqual(result["repo_url"], "https://huggingface.co/owner/model")
         for item in result["files"]:
             self.assertEqual(item["sha256"], hashlib.sha256(self.uploaded[item["path"]]).hexdigest())
@@ -258,6 +276,128 @@ class PublishTests(unittest.TestCase):
         self.manifest()
         with self.assertRaisesRegex(publish.PublishError, "unverified"):
             self.call()
+
+
+    def test_card_has_local_branded_badge_and_verified_evidence(self):
+        self.call()
+        card = self.uploaded["README.md"].decode()
+        self.assertIn("[![Created with Vespasian](vespasian-badge.svg)](https://chrisvoncsefalvay.github.io/vespasian/)", card)
+        self.assertIn("pipeline_tag: text-generation", card)
+        self.assertIn('base_model: "google/gemma-3-1b-it"', card)
+        self.assertIn(SHA, card)
+        self.assertIn("| validation | 2 | 1.000000 | 2 | 1.000000 |", card)
+        self.assertIn("| test | not reported | not reported | not reported | not reported |", card)
+        self.assertIn("private user objective", card)
+        self.assertIn("No new licence", card)
+        badge = self.uploaded["vespasian-badge.svg"].decode()
+        self.assertIn("Created with Vespasian", badge)
+        self.assertNotIn("href=", badge)
+
+
+    def test_behaviour_category_and_tied_catalogue_are_safe_aggregates(self):
+        settings = json.loads((self.run / "run.json").read_text())
+        settings["target_type"] = "classification"
+        (self.run / "run.json").write_text(json.dumps(settings))
+        model = json.loads((self.run / "model.json").read_text())
+        model["token_tables"] = [{"tied": True, "name": "PRIVATE TOKEN", "aliases": ["PRIVATE PROMPT"]}]
+        (self.run / "model.json").write_text(json.dumps(model))
+        self.call()
+        card = self.uploaded["README.md"].decode()
+        self.assertIn("Behaviour category: Classification", card)
+        self.assertIn("1 tied input/output tables", card)
+        self.assertIn("not evidence that a token-row edit was applied", card)
+        self.assertNotIn("PRIVATE TOKEN", repr(self.uploaded))
+
+    def test_existing_card_metadata_and_prose_are_preserved(self):
+        old = "---\nlicense: mit\nlanguage: en\n---\n# Author card\nAuthor limitations.\n"
+        self.card_download.return_value = old
+        self.api.list_repo_files.return_value = ["README.md"]
+        result = self.call()
+        card = self.uploaded["README.md"].decode()
+        self.assertTrue(card.startswith(old))
+        self.card_download.assert_called_once_with(self.api, "owner/model", SHA)
+        self.assertEqual(card.count("license: mit"), 1)
+        item = next(item for item in result["files"] if item["path"] == "README.md")
+        self.assertEqual(item["sha256"], hashlib.sha256(self.uploaded["README.md"]).hexdigest())
+        self.card_download.return_value = card
+        self.call()
+        self.assertEqual(self.uploaded["README.md"].decode(), card)
+
+
+    def test_conflicting_existing_base_model_stops_upload(self):
+        for metadata in ('base_model: other/model', 'base_model: [other/model]',
+                         "base_model:\n- other/model", "base_model: [google/gemma-3-1b-it, other/model]"):
+            with self.subTest(metadata=metadata):
+                self.api.list_repo_files.return_value = ["README.md"]
+                old = "---\n" + metadata + "\n---\nAuthor text."
+                self.card_download.return_value = old
+                with self.assertRaisesRegex(publish.PublishError, "base_model metadata does not match"):
+                    self.call()
+                self.api.create_commit.assert_not_called()
+                self.assertEqual(self.card_download.return_value, old)
+
+    def test_matching_yaml_base_model_forms_are_preserved(self):
+        for metadata in ('base_model: "google/gemma-3-1b-it"',
+                         "base_model: [google/gemma-3-1b-it]",
+                         "base_model:\n- google/gemma-3-1b-it"):
+            with self.subTest(metadata=metadata):
+                self.api.list_repo_files.return_value = ["README.md"]
+                old = "---\n" + metadata + "\n---\nAuthor text."
+                self.card_download.return_value = old
+                self.call()
+                self.assertTrue(self.uploaded["README.md"].decode().startswith(old))
+
+    def test_republishing_generated_card_with_changed_base_stops_upload(self):
+        self.call()
+        self.card_download.return_value = self.uploaded["README.md"].decode()
+        self.api.create_commit.reset_mock()
+        self.api.list_repo_files.return_value = ["README.md"]
+        model = json.loads((self.run / "model.json").read_text())
+        model["model"] = "Qwen/Qwen3.5-0.8B"
+        (self.run / "model.json").write_text(json.dumps(model))
+        with self.assertRaisesRegex(publish.PublishError, "base_model metadata does not match"):
+            self.call()
+        self.api.create_commit.assert_not_called()
+
+    def test_unverified_base_cannot_preserve_claim_of_known_base(self):
+        self.api.list_repo_files.return_value = ["README.md"]
+        self.card_download.return_value = "---\nbase_model: google/gemma-3-1b-it\n---\nAuthor text."
+        (self.run / "model.json").write_text(json.dumps({"model": "/private/local/model"}))
+        with self.assertRaisesRegex(publish.PublishError, "base_model metadata does not match"):
+            self.call()
+        self.api.create_commit.assert_not_called()
+
+    def test_unreadable_existing_card_stops_publication(self):
+        self.api.list_repo_files.return_value = ["README.md"]
+        self.card_download.side_effect = publish.PublishError("Could not read existing card")
+        with self.assertRaises(publish.PublishError):
+            self.call()
+        self.api.create_commit.assert_not_called()
+
+    def test_ambiguous_managed_card_stops_publication(self):
+        self.api.list_repo_files.return_value = ["README.md"]
+        self.card_download.return_value = publish._CARD_START * 2
+        with self.assertRaises(publish.PublishError):
+            self.call()
+        self.api.create_commit.assert_not_called()
+
+    def test_incomplete_scoring_is_explicit_without_publishing_error(self):
+        self.report["final_scoring_error"] = "PRIVATE PROMPT hf_super_secret /home/private/data"
+        self.report["final_metrics"] = {}
+        (self.run / "report.json").write_text(json.dumps(self.report))
+        self.call()
+        card = self.uploaded["README.md"].decode()
+        self.assertIn("WARNING: final scoring was incomplete", card)
+        self.assertNotIn("hf_super_secret", card)
+        self.assertNotIn("PRIVATE PROMPT", card)
+
+    def test_untrusted_base_model_cannot_inject_yaml(self):
+        (self.run / "model.json").write_text(json.dumps({"model": "unknown/model\nlicense: fake", "revision": "PRIVATE"}))
+        self.call()
+        card = self.uploaded["README.md"].decode()
+        self.assertNotIn("license: fake", card)
+        self.assertNotIn("base_model:", card)
+        self.assertIn("not publicly identified", card)
 
     def test_existing_shards_and_legacy_weights_are_removed_with_new_single_file(self):
         self.api.list_repo_files.return_value = ["model.safetensors.index.json", "model-00001-of-00002.safetensors",

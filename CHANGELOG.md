@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- Capability-checked causal model loading, explicit plain/chat prompting and operator-configured Space models; tested shortlist distinguished from generic compatibility.
+- Shared Hugging Face task metadata, suggestions, task-filtered dataset search and explicit choices for missing or ambiguous tags.
+- Simplified Space essentials with secondary controls under Advanced.
+- Durable compact latest/best patch journals, patch-only or full-model final output, exact standalone replay and explicitly authorized private incremental backup.
+
+- Shared $10 frontier budget default, optional turn cap and selectable reasoning effort defaulting to low.
+- Target model, behaviour, data and runtime setup order in the Space, with explicit deployment limits.
+- Capability-filtered strategy guidance informed by IWIBench traces, with public plans and reflection on measured outcomes.
+- Bounded token-row scaling and interpolation with tokenizer-grounded selectors, tied-weight handling and sparse rollback.
+- Recorded assess, inspect, plan, patch, test and keep/revert stages in the terminal and Space.
+- Strict API reservation option and explicit CLI-login estimated-spend limits.
+- Shared upload cards with verified run metadata and evaluations, preserved existing cards and a linked Created with Vespasian badge.
+- Compact strategy discovery with on-demand skill, target, token, rollout and measured-history tools instead of full manifest prompts.
+- Forward-only measured residual output-row editing and preservation-key-projected contrastive MLP edits, with explicit unsupported ROME/MEMIT and stored-patch arithmetic boundaries.
+- Exact same-input parity tests for all eight operations, tied/untied token tables and checkpoint reload across persistent and restored model state.
+
 ## 0.1.5
 
 - Product site, social card and expanded documentation for Vespasian: The Weight Space Editing Assistant.

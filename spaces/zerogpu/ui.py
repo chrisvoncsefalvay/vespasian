@@ -12,7 +12,7 @@ by this module's rendering code.
         "events": [<unmodified CLI JSON events in chronological order>],
         "status": "idle" | "running" | "complete" | "stopped" | "error",
         "config": {"model": str, "goal": str, "budget": float,
-                   "max_turns": int, "health_checks": list[str]},
+                   "max_turns": int | None, "health_checks": list[str]},
         "elapsed": float,  # elapsed seconds, optional
         "error": str | None,
         "message": str,  # optional current scheduling/status message
@@ -138,43 +138,53 @@ def build_ui() -> tuple[gr.Blocks, dict[str, Any]]:
         with gr.Column(elem_id="vs-workbench"):
             with gr.Column(elem_id="vs-setup") as controls["setup_panel"]:
                 controls["return_results"] = gr.Button("Return to results", visible=False, elem_id="vs-return-results")
-                with gr.Tabs(elem_id="vs-setup-tabs", selected="behaviour") as controls["setup_tabs"]:
-                    with gr.Tab("01 Behaviour", id="behaviour", elem_id="vs-step-behaviour"):
+                with gr.Tabs(elem_id="vs-setup-tabs", selected="target") as controls["setup_tabs"]:
+                    with gr.Tab("01 Model", id="target", elem_id="vs-step-target"):
+                        gr.HTML(heading("Choose the model to edit", "Start with the small model whose behaviour you want to change. The frontier editor is selected in Runtime."))
+                        controls["error_target"] = gr.HTML("")
+                        controls["model"] = gr.Dropdown(choices=[("Qwen 3.5 · 0.8B", "Qwen/Qwen3.5-0.8B"), ("Gemma 3 · 1B", "google/gemma-3-1b-it")], value="Qwen/Qwen3.5-0.8B", label="Base model", elem_id="vs-model")
+                        gr.HTML('<p class="vs-inline-note">This list contains the models configured for this ZeroGPU deployment. The terminal can attempt compatible local or Hub causal language models; capability checks determine available edits. Qwen 3.5 0.8B and Gemma 3 1B have recorded real-model checks, not a guarantee for other revisions or every operation.</p>')
+                        controls["next_behaviour"] = gr.Button("Continue to behaviour →", variant="primary")
+                    with gr.Tab("02 Behaviour", id="behaviour", elem_id="vs-step-behaviour"):
                         gr.HTML(heading("What should change?", "Choose the behaviour, define success and decide what should remain intact."))
                         controls["error_behaviour"] = gr.HTML("")
                         with gr.Row(elem_id="vs-behaviour-row", equal_height=False):
                             with gr.Column(scale=3, min_width=280):
                                 controls["preset"] = gr.Dropdown(choices=setup.starter_presets(), value=None, label="Start from an example", info="Optional. Review and change every setting before running.", elem_id="vs-preset")
-                                controls["target_type"] = gr.Dropdown(choices=[("Factual knowledge", "factual"), ("Writing style", "style"), ("Output format", "format"), ("Classification", "classification"), ("Custom behaviour", "custom")], value="factual", label="Type of change", elem_id="vs-target-type")
+                                controls["hf_task"] = gr.Dropdown(choices=setup.task_choices(), value=None, label="Hugging Face task", info="Choose the task, or inspect a dataset for a suggestion. Missing or ambiguous tags need your choice.", elem_id="vs-hf-task")
+                                controls["task_help"] = gr.HTML(setup.task_help({}), elem_id="vs-task-help")
                                 controls["dataset_mode"] = gr.Radio(choices=[("Paired examples", "paired"), ("Reference writing", "corpus"), ("Prompts with a rubric", "prompts")], value="paired", label="Data shape", elem_id="vs-dataset-mode")
                                 controls["mode_help"] = gr.HTML('<p class="vs-inline-note">Each example contains an input and the reference answer you want the model to produce.</p>')
                                 controls["goal"] = gr.Textbox(label="Editing objective", placeholder="State the behaviour you want to improve.", lines=4, elem_id="vs-goal")
                                 controls["objective_suggestion"] = gr.HTML('<p class="vs-suggestion">Return answers that agree with the dataset references.</p>', elem_id="vs-objective-suggestion")
                                 controls["use_suggestion"] = gr.Button("Use suggested objective", variant="secondary", elem_id="vs-use-suggestion")
-                                controls["metric"] = gr.Dropdown(choices=setup.metric_choices("paired"), value="auto", label="Objective metric", elem_id="vs-metric")
-                                controls["metric_help"] = gr.HTML('<p class="vs-inline-note">The editor assesses your examples and selects a compatible metric before proposing edits.</p>')
                             with gr.Column(scale=2, min_width=280, elem_id="vs-preservation"):
-                                gr.HTML('<h3>Preservation</h3><p class="vs-inline-note">Track the capabilities you want to keep while the objective changes.</p>')
-                                controls["controls"] = gr.Textbox(label="Behaviour to preserve", placeholder="For example, answer in the language of the question.", lines=3, info="Optional. Add one requirement per line.", elem_id="vs-controls")
-                                controls["health_checks"] = gr.Dropdown(choices=[("Copying", "copying"), ("Arithmetic", "arithmetic"), ("JSON formatting", "json"), ("MMLU · anatomy", "mmlu:anatomy"), ("MMLU · high school mathematics", "mmlu:high_school_mathematics")], value=["copying"], multiselect=True, allow_custom_value=True, max_choices=4, label="Preservation checks", info="Choose up to four. Add an MMLU subject as mmlu:subject.", elem_id="vs-health-checks")
-                                controls["health_count"] = gr.Number(value=4, minimum=1, maximum=16, step=1, precision=0, label="Examples per check", elem_id="vs-health-count")
-                                controls["health_policy"] = gr.Radio(choices=[("Track scores", "track"), ("Reject above a limit", "enforce")], value="track", label="Regression policy", elem_id="vs-health-policy")
-                                controls["health_limit_pp"] = gr.Number(value=10, minimum=0, maximum=100, step=1, visible=False, label="Maximum drop · percentage points", elem_id="vs-health-limit")
-                                controls["health_help"] = gr.HTML('<p class="vs-inline-note">Scores are measured alongside the objective. Tracking does not reject an edit when a check declines.</p>')
+                                with gr.Accordion("Advanced evaluation and preservation", open=False, elem_id="vs-advanced-evaluation"):
+                                    controls["target_type"] = gr.Dropdown(choices=[("Factual knowledge", "factual"), ("Writing style", "style"), ("Output format", "format"), ("Classification", "classification"), ("Custom behaviour", "custom")], value="factual", label="Type of change", elem_id="vs-target-type")
+                                    controls["metric"] = gr.Dropdown(choices=setup.metric_choices("paired"), value="auto", label="Objective metric", elem_id="vs-metric")
+                                    controls["metric_help"] = gr.HTML('<p class="vs-inline-note">The editor assesses your examples and selects a compatible metric before proposing edits.</p>')
+                                    gr.HTML('<h3>Preservation</h3><p class="vs-inline-note">Track the capabilities you want to keep while the objective changes.</p>')
+                                    controls["controls"] = gr.Textbox(label="Behaviour to preserve", placeholder="For example, answer in the language of the question.", lines=3, info="Optional. Add one requirement per line.", elem_id="vs-controls")
+                                    controls["health_checks"] = gr.Dropdown(choices=[("Copying", "copying"), ("Arithmetic", "arithmetic"), ("JSON formatting", "json"), ("MMLU · anatomy", "mmlu:anatomy"), ("MMLU · high school mathematics", "mmlu:high_school_mathematics")], value=["copying"], multiselect=True, allow_custom_value=True, max_choices=4, label="Preservation checks", info="Choose up to four. Add an MMLU subject as mmlu:subject.", elem_id="vs-health-checks")
+                                    controls["health_count"] = gr.Number(value=4, minimum=1, maximum=16, step=1, precision=0, label="Examples per check", elem_id="vs-health-count")
+                                    controls["health_policy"] = gr.Radio(choices=[("Track scores", "track"), ("Reject above a limit", "enforce")], value="track", label="Regression policy", elem_id="vs-health-policy")
+                                    controls["health_limit_pp"] = gr.Number(value=10, minimum=0, maximum=100, step=1, visible=False, label="Maximum drop · percentage points", elem_id="vs-health-limit")
+                                    controls["health_help"] = gr.HTML('<p class="vs-inline-note">Scores are measured alongside the objective. Tracking does not reject an edit when a check declines.</p>')
                         with gr.Row(elem_id="vs-setup-actions-behaviour"):
+                            controls["back_target"] = gr.Button("← Model", variant="secondary")
                             controls["next_data"] = gr.Button("Continue to data →", variant="primary")
-                    with gr.Tab("02 Data", id="data", elem_id="vs-step-data"):
-                        gr.HTML(heading("Choose the model and examples", "Inspect your data, confirm the fields and set how many examples to use."))
+                    with gr.Tab("03 Data", id="data", elem_id="vs-step-data"):
+                        gr.HTML(heading("Choose the examples", "Inspect your data, confirm the fields and set how many examples to use."))
                         controls["error_data"] = gr.HTML("")
                         with gr.Row(elem_id="vs-data-row", equal_height=False):
                             with gr.Column(scale=1, min_width=290, elem_id="vs-data-fields"):
-                                controls["model"] = gr.Dropdown(choices=[("Qwen 3.5 · 0.8B", "Qwen/Qwen3.5-0.8B"), ("Gemma 3 · 1B", "google/gemma-3-1b-it")], value="Qwen/Qwen3.5-0.8B", label="Base model", elem_id="vs-model")
                                 controls["dataset_location"] = gr.Radio(choices=[("Hugging Face", "hub"), ("Upload a file", "file")], value="hub", label="Dataset location", elem_id="vs-dataset-location")
                                 with gr.Column(elem_id="vs-hub-fields") as controls["hub_fields"]:
                                     controls["dataset_catalog"] = gr.Radio(choices=[("Public datasets", "public"), ("My datasets", "account"), ("Recent", "recent")], value="public", label="Browse datasets", elem_id="vs-dataset-catalog")
                                     with gr.Row():
                                         controls["dataset_query"] = gr.Textbox(label="Search public datasets", placeholder="Name or subject", scale=3, elem_id="vs-dataset-query")
                                         controls["search_datasets"] = gr.Button("Search", scale=1, min_width=85, elem_id="vs-search-datasets")
+                                    controls["include_untagged"] = gr.Checkbox(value=False, label="Search all tasks, including untagged datasets", info="Manual repository entry is always available.")
                                     controls["dataset_source"] = gr.Dropdown(choices=["openai/gsm8k"], allow_custom_value=True, label="Dataset repository", info="Choose a result or enter organisation/dataset.", elem_id="vs-dataset-source")
                                     controls["catalog_status"] = gr.HTML("")
                                     controls["refresh_datasets"] = gr.Button("Refresh my datasets", variant="secondary", elem_id="vs-refresh-datasets")
@@ -204,36 +214,48 @@ def build_ui() -> tuple[gr.Blocks, dict[str, Any]]:
                                         controls["test_preview_html"] = gr.HTML('<div class="vs-preview-empty"><h3>Independent test examples</h3><p>Add a test repository to measure the retained checkpoint on separate examples.</p></div>', elem_id="vs-test-preview")
                         with gr.Row(elem_id="vs-setup-actions-data"):
                             controls["back_behaviour"] = gr.Button("← Behaviour", variant="secondary")
-                            controls["next_editor"] = gr.Button("Continue to editor →", variant="primary")
-                    with gr.Tab("03 Editor", id="editor", elem_id="vs-step-editor"):
-                        gr.HTML(heading("Set the editor and budget", "Choose the frontier model that proposes edits and the maximum amount to spend on its API calls."))
+                            controls["next_editor"] = gr.Button("Continue to runtime →", variant="primary")
+                    with gr.Tab("04 Runtime", id="editor", elem_id="vs-step-editor"):
+                        gr.HTML(heading("Set the runtime and frontier editor", "Choose the editor, provide its API key and set your spending limit. Secondary settings have ready-to-use defaults."))
                         controls["error_editor"] = gr.HTML("")
                         with gr.Row(equal_height=False):
                             with gr.Column(min_width=280):
                                 controls["editor"] = gr.Radio(choices=[("OpenAI", "openai"), ("Anthropic", "anthropic")], value="openai", label="Editor provider", elem_id="vs-editor")
                                 controls["editor_model"] = gr.Dropdown(choices=setup.editor_choices("openai"), value="gpt-6.1-sol", allow_custom_value=True, label="Editor model", info="Choose a model or enter a custom model ID.", elem_id="vs-editor-model")
                                 controls["api_key"] = gr.Textbox(type="password", label="Editor API key", placeholder="Your provider’s API key", elem_id="vs-api-key")
-                                controls["pricing_html"] = gr.HTML("", elem_id="vs-pricing")
-                                with gr.Accordion("Custom token pricing", open=False):
-                                    gr.HTML('<p class="vs-inline-note">For a custom model, provide both prices in USD per million tokens.</p>')
-                                    controls["input_price"] = gr.Textbox(label="Input price", placeholder="Use the model rate", elem_id="vs-input-price")
-                                    controls["output_price"] = gr.Textbox(label="Output price", placeholder="Use the model rate", elem_id="vs-output-price")
                             with gr.Column(min_width=280):
-                                controls["budget"] = gr.Number(value=1.0, minimum=0.01, maximum=100, step=0.25, label="Editor budget · USD", elem_id="vs-budget")
-                                controls["max_turns"] = gr.Number(value=5, minimum=1, maximum=50, step=1, precision=0, label="Maximum edit turns", elem_id="vs-max-turns")
-                                gr.HTML('<p class="vs-inline-note">The editor budget covers frontier API calls. GPU quota is managed by Hugging Face. The controller reserves the estimated cost of the next editor call before starting it.</p>')
-                                controls["max_new_tokens"] = gr.Number(value=64, minimum=16, maximum=128, step=16, precision=0, label="Maximum generated tokens per answer")
-                                controls["save_trajectory"] = gr.Checkbox(value=True, label="Include the edit trajectory in the run bundle")
+                                controls["budget"] = gr.Number(value=10.0, minimum=0.01, maximum=100, step=0.25, label="Editor budget · USD", elem_id="vs-budget")
+                                gr.HTML('<p class="vs-inline-note">Default: low reasoning, no turn cap, up to 128 answer tokens. The spending limit includes every editor decision and tool request.</p>')
+                                controls["pricing_html"] = gr.HTML("", elem_id="vs-pricing")
+                        with gr.Accordion("Advanced runtime settings", open=False, elem_id="vs-advanced-runtime"):
+                            with gr.Row():
+                                controls["max_turns"] = gr.Textbox(value="", placeholder="No turn cap", label="Maximum edit turns · optional", info="Leave blank to use only the spending limit. There is no default turn cap.", elem_id="vs-max-turns")
+                                controls["reasoning_effort"] = gr.Dropdown(choices=["low", "medium", "high"], value="low", label="Editor reasoning effort", info="Sent to the selected provider; unsupported requests stop without substitution.", elem_id="vs-reasoning-effort")
+                                controls["max_new_tokens"] = gr.Number(value=128, minimum=1, maximum=128, step=1, precision=0, label="Maximum generated tokens per answer")
+                            controls["prompt_format"] = gr.Dropdown(choices=[("Use model chat template", "auto"), ("Require chat template", "chat"), ("Plain text prompts", "plain")], value="auto", label="Prompt format", info="Models without a chat template require an explicit plain-text choice.")
+                            controls["save_trajectory"] = gr.Checkbox(value=True, label="Include the edit trajectory in the run bundle")
+                            gr.HTML('<p class="vs-inline-note">Custom editor models require both token prices in USD per million tokens.</p>')
+                            with gr.Row():
+                                controls["input_price"] = gr.Textbox(label="Input price", placeholder="Use the model rate", elem_id="vs-input-price")
+                                controls["output_price"] = gr.Textbox(label="Output price", placeholder="Use the model rate", elem_id="vs-output-price")
+                        controls["save_format"] = gr.Radio(choices=[("Materialised model and compact patches", "model"), ("Compact patches only", "patch")], value="model", label="Final output", info="Latest/best patches are checkpointed during the run. Patch-only output needs the exact base model to replay.")
+                        with gr.Accordion("Private patch backup · optional", open=False, elem_id="vs-patch-backup"):
+                            controls["patch_backup"] = gr.Checkbox(value=False, label="Back up latest/best patches after measured rounds to my named private repository")
+                            controls["patch_repo"] = gr.Textbox(label="Private patch repository", placeholder="your-account/private-patches", info="Shares patch weights and base-model metadata only, not your private objective or examples. Uses your signed-in account or session token.")
+                            controls["patch_create"] = gr.Checkbox(value=False, label="Create this private repository if it does not exist")
+                            gr.HTML('<p class="vs-inline-note">Local patches need no account. Space storage is temporary and does not survive pod replacement; download or explicitly enable private backup to retain them.</p>')
+                        with gr.Accordion("Deployment and spending limits", open=False, elem_id="vs-deployment-limits"):
+                            gr.HTML('<p class="vs-inline-note">The editor budget covers frontier API calls; Hugging Face manages GPU quota. This deployment allows up to $100 per run, 128 examples per dataset, four preservation checks with 16 examples each, 128 answer tokens and 1,024 sequence tokens. Seed 42, editor output cap 2,048 tokens and preservation tolerance 0 match the terminal defaults. Keep this tab open; five minutes without a browser heartbeat cancels the run. API cost is reserved before each request at the configured token rates, not enforced as a provider billing ceiling. Terminal CLI-login sessions instead report estimated spend between calls.</p>')
                         with gr.Row(elem_id="vs-setup-actions-editor"):
                             controls["back_data"] = gr.Button("← Data", variant="secondary")
                             controls["next_review"] = gr.Button("Review experiment →", variant="primary")
-                    with gr.Tab("04 Review", id="review", elem_id="vs-step-review"):
+                    with gr.Tab("05 Review", id="review", elem_id="vs-step-review"):
                         gr.HTML(heading("Review the experiment", "Check the data, evaluation and spending limits before starting."))
                         controls["error_review"] = gr.HTML("")
                         controls["review_html"] = gr.HTML('<p class="vs-inline-note">Complete the previous steps to review your experiment.</p>', elem_id="vs-review")
-                        gr.HTML('<p class="vs-run-note">Starting sends your objective and selected examples to the editor provider using your API key.</p>')
+                        gr.HTML('<p class="vs-run-note">Starting sends your objective and selected examples to the editor provider using your API key. Keep this tab open while running. Local downloads expire after two hours; private patch backup is optional.</p>')
                         with gr.Row(elem_id="vs-setup-actions-review"):
-                            controls["back_editor"] = gr.Button("← Editor", variant="secondary")
+                            controls["back_editor"] = gr.Button("← Runtime", variant="secondary")
                             controls["run_button"] = gr.Button("Start experiment →", variant="primary", elem_id="vs-run-button")
             with gr.Column(visible=False, elem_id="vs-monitor") as controls["monitor_panel"]:
                 with gr.Row(elem_id="vs-live-actions"):
@@ -243,6 +265,7 @@ def build_ui() -> tuple[gr.Blocks, dict[str, Any]]:
                 controls["dashboard_html"] = gr.HTML(render_dashboard(), elem_id="vs-dashboard-output")
                 with gr.Column(visible=False, elem_id="vs-results") as controls["results_panel"]:
                     gr.HTML('<h2>Save your results</h2><p class="vs-inline-note">Download this run or save its model and trajectory to your Hugging Face account.</p>')
+                    controls["patch_download"] = gr.File(label="Download latest/best patches", interactive=False, visible=False, elem_id="vs-patch-download")
                     controls["download"] = gr.File(label="Download run bundle", interactive=False, visible=False, elem_id="vs-download")
                     gr.HTML('<p class="vs-download-note">The run bundle is available for two hours.</p>')
                     with gr.Row(equal_height=False):
@@ -256,6 +279,11 @@ def build_ui() -> tuple[gr.Blocks, dict[str, Any]]:
                             controls["trajectory_visibility"] = gr.Radio(choices=[("Private", "private"), ("Public", "public")], value="private", label="Trajectory visibility")
                             controls["trajectory_create"] = gr.Checkbox(value=True, label="Create the trajectory repository if needed")
                             controls["publish_trajectory_button"] = gr.Button("Save trajectory to Hub", interactive=False)
+                    with gr.Accordion("Save compact patches privately", open=False):
+                        controls["patch_save_repo"] = gr.Textbox(label="Private patch repository", placeholder="your-account/private-patches")
+                        controls["patch_save_consent"] = gr.Checkbox(value=False, label="Share this run's latest/best patch weights and base-model metadata with this private repository")
+                        controls["patch_save_create"] = gr.Checkbox(value=False, label="Create this private repository if needed")
+                        controls["publish_patches_button"] = gr.Button("Save latest/best patches privately", interactive=False)
                     controls["publish_status"] = gr.Markdown("", elem_id="vs-publish-status")
         gr.HTML('<footer class="vs-page-footer"><span>Vespasian/The Weight Space Editing Assistant</span><button type="button" data-vs-help>Quick guide</button><a href="https://github.com/chrisvoncsefalvay/vespasian" target="_blank" rel="noopener noreferrer">Source code ↗</a></footer>')
         controls["state"] = gr.State({"events": [], "status": "idle", "config": {}})

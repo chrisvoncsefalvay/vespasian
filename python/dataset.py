@@ -12,6 +12,8 @@ from pathlib import Path
 import re
 import sys
 import tempfile
+import task_metadata
+
 from typing import Any, Callable, Iterable
 
 
@@ -417,11 +419,36 @@ def _display_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], lis
     return displayed, truncated
 
 
+def prepare_task_row(row, fields, mode, task, features=None):
+    value = None
+    if task == "text-classification" and mode == "paired":
+        for part in selector_parts(row, fields[1]):
+            try:
+                value = field_value(row, part)
+                break
+            except (KeyError, DatasetError):
+                pass
+    try:
+        return task_metadata.prepare_row(row, fields, mode, task, features, target_value=value)
+    except ValueError as error:
+        raise DatasetError(str(error)) from None
+
+
+def _model_task_info(api: Any, model_id: str | None):
+    if not isinstance(model_id, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", model_id):
+        return None
+    try:
+        return api.model_info(repo_id=model_id)
+    except Exception:
+        return None
+
+
 def preview(
     *, repo: str, split: str = "train", config: str | None = None,
     revision: str | None = None, prompt_field: str | None = None,
     target_field: str | None = None, preview_rows: int = 3,
     dataset_mode: str = "paired", text_field: str | None = None,
+    hf_task: str | None = None, model_id: str | None = None,
     api: Any = None, loader: Callable[..., Iterable[dict[str, Any]]] | None = None,
     config_names: Callable[..., list[str]] | None = None,
     split_names: Callable[..., list[str]] | None = None,
@@ -430,6 +457,10 @@ def preview(
     """Read metadata and a few rows at one immutable Hub revision, without publishing files."""
     _validate_repo(repo)
     _validate_mode(dataset_mode)
+    try:
+        hf_task = task_metadata.normalize_task(hf_task)
+    except ValueError as error:
+        raise DatasetError(str(error)) from None
     if isinstance(preview_rows, bool) or not isinstance(preview_rows, int) or not 1 <= preview_rows <= 5:
         raise DatasetError("Preview size must be between 1 and 5 rows")
     if api is None or loader is None or config_names is None or split_names is None:
@@ -455,6 +486,7 @@ def preview(
         result["error"] = "The Hub returned no immutable revision for this dataset"
         return result
     result["revision"] = sha
+    result["task_metadata"] = task_metadata.assess_task(info, hf_task, _model_task_info(api, model_id))
     try:
         configs = config_names(repo, revision=sha)
     except Exception:
@@ -530,7 +562,11 @@ def preview(
                 if not isinstance(selected, (list, tuple)):
                     raise DatasetError("The selected example field must contain an array")
                 available = len(selected)
-            for pair in itertools.islice(mapped_examples(row, fields, dataset_mode), remaining):
+            try:
+                prepared = prepare_task_row(row, fields, dataset_mode, result["task_metadata"]["selected_task"], getattr(stream, "features", None))
+            except ValueError as error:
+                raise DatasetError(str(error)) from None
+            for pair in itertools.islice(mapped_examples(prepared, fields, dataset_mode), remaining):
                 mapped.append({"row_index": row_index, **pair})
             if available > remaining:
                 result["mapped_rows_truncated"] = True
@@ -558,6 +594,7 @@ def fetch(
     config: str | None = None, revision: str | None = None,
     prompt_field: str | None = None, target_field: str | None = None,
     dataset_mode: str = "paired", text_field: str | None = None,
+    hf_task: str | None = None, model_id: str | None = None,
     api: Any = None, loader: Callable[..., Iterable[dict[str, Any]]] | None = None,
     config_names: Callable[..., list[str]] | None = None,
     runtime_version: str | None = None,
@@ -569,6 +606,10 @@ def fetch(
     """
     _validate_repo(repo)
     _validate_mode(dataset_mode)
+    try:
+        hf_task = task_metadata.normalize_task(hf_task)
+    except ValueError as error:
+        raise DatasetError(str(error)) from None
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100_000:
         raise DatasetError("Dataset limit must be between 1 and 100000 examples")
     if not split or not split.strip():
@@ -593,6 +634,11 @@ def fetch(
     sha = getattr(info, "sha", None)
     if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-fA-F]{40,64}", sha):
         raise DatasetError("The Hub returned no immutable revision for this dataset")
+    task = task_metadata.assess_task(info, hf_task, _model_task_info(api, model_id))
+    try:
+        selected_task = task_metadata.require_task(task)
+    except ValueError as error:
+        raise DatasetError(str(error)) from None
     if config is None and config_names is not None:
         try:
             available = config_names(repo, revision=sha)
@@ -634,7 +680,11 @@ def fetch(
                     if fields is None:
                         fields = resolve_mode_fields(row, dataset_mode, prompt_field, target_field, text_field)
                     columns.update(str(column) for column in row)
-                    for pair in mapped_examples(row, fields, dataset_mode):
+                    try:
+                        prepared = prepare_task_row(row, fields, dataset_mode, selected_task, getattr(stream, "features", None))
+                    except ValueError as error:
+                        raise DatasetError(str(error)) from None
+                    for pair in mapped_examples(prepared, fields, dataset_mode):
                         strategy = pair["transformation"]["kind"]
                         transformations[strategy] = transformations.get(strategy, 0) + 1
                         if "target_source" in pair:
@@ -666,6 +716,7 @@ def fetch(
                        for field in fields if field for part in selector_parts(row, field))
         metadata: dict[str, Any] = {
             "source": "huggingface", "repo": repo, "revision_requested": revision,
+            "hf_task": selected_task, "task_metadata": task,
             "revision": sha, "config_requested": requested_config, "config": resolved_config,
             "split": split, "selection": "first_examples" if expanded else "first_rows", "limit": limit,
             "source_rows": source_rows,
@@ -719,6 +770,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--prompt-field", help="Prompt selector, such as question or examples[].input")
     parser.add_argument("--target-field", help="Target selector, such as answer or examples[].target")
     parser.add_argument("--dataset-mode", choices=("paired", "corpus", "prompts"), default="paired")
+    parser.add_argument("--model-id", help="Optional model metadata for task suggestions; not an architecture guarantee")
+    parser.add_argument("--task", dest="hf_task", help="Hugging Face text task; required when dataset tags are missing or ambiguous")
     parser.add_argument("--text-field", help="Corpus text selector, such as text or documents[].content")
     parser.add_argument("--limit", type=int, default=100)
     parser.add_argument("--preview", action="store_true", help="Read dataset metadata and sample rows without importing")

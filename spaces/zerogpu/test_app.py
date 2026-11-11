@@ -32,6 +32,91 @@ class AppRequestTests(unittest.IsolatedAsyncioTestCase):
         cls.controls = cls.demo.vespasian_controls
         cls.callbacks = {function.api_name: function for function in cls.demo.fns.values()}
 
+    def test_setup_order_and_runtime_defaults(self):
+        tabs = [component for component in self.demo.blocks.values() if isinstance(component, self.gr.Tab)]
+        setup_tabs = [component.id for component in tabs if component.id in {"target", "behaviour", "data", "editor", "review"}]
+        self.assertEqual(setup_tabs, ["target", "behaviour", "data", "editor", "review"])
+        self.assertEqual(self.controls["setup_tabs"].selected, "target")
+        self.assertEqual(self.controls["budget"].value, 10)
+        self.assertEqual(self.controls["max_new_tokens"].value, 128)
+        self.assertEqual(self.controls["max_turns"].value, "")
+        self.assertEqual(self.controls["reasoning_effort"].value, "low")
+        self.assertIn("reasoning_effort", self.app.FIELDS)
+        self.assertEqual(self.app.parse_selection({"turn": 75})["turn"], None)
+        self.assertEqual(self.app.parse_selection('{"turn": 75}')["turn"], 75)
+
+
+    def test_secondary_settings_are_collapsed_and_essentials_remain_available(self):
+        by_id = {getattr(block, "elem_id", None): block for block in self.demo.blocks.values()}
+        for key in ("vs-advanced-runtime", "vs-advanced-evaluation", "vs-deployment-limits", "vs-patch-backup"):
+            self.assertFalse(by_id[key].open)
+        for field in ("model", "hf_task", "goal", "editor", "editor_model", "api_key", "budget"):
+            self.assertTrue(self.controls[field].visible)
+        self.assertFalse(self.controls["patch_backup"].value)
+        self.assertFalse(self.controls["patch_create"].value)
+        self.assertEqual(self.controls["save_format"].value, "model")
+
+    async def test_private_patch_save_requires_explicit_consent(self):
+        run, state = self.fixture_run(finished=True)
+        function = self.callback("publish_patches_button", name="publish_patches")
+        with patch.dict(self.app.runtime.RUNS, {run.id: run}, clear=True), patch.object(self.app.hub, "core_module") as module:
+            result = (await self.call(function, self.request(), self.inputs(function, {"state": state, "patch_save_repo": "visitor/patches", "patch_save_consent": False, "hf_token": "visitor-token"})))[0]
+        module.assert_not_called()
+        self.assertIn("Explicitly authorize", self.returned(function, result, "publish_status"))
+
+    async def test_private_patch_save_uses_session_credentials_and_private_helper(self):
+        run, state = self.fixture_run(finished=True)
+        function = self.callback("publish_patches_button", name="publish_patches")
+        helper = Mock()
+        with patch.dict(self.app.runtime.RUNS, {run.id: run}, clear=True), patch.object(self.app.hub, "core_module", return_value=helper):
+            result = (await self.call(function, self.request(), self.inputs(function, {"state": state, "patch_save_repo": "visitor/patches", "patch_save_consent": True, "hf_token": "visitor-token"})))[0]
+        helper.publish_private.assert_called_once_with(run.output / "patches", "visitor/patches", "visitor-token", consent=True, create=False)
+        self.assertNotIn("visitor-token", str(result["data"]))
+
+
+    async def test_model_tags_suggest_without_overwriting_task_choice(self):
+        function = self.callback("model", "input", "model_task_hint")
+        self.assertNotIn(self.controls["hf_task"], function.outputs)
+        with patch.object(self.app.hub, "model_task_metadata", return_value={"model_pipeline_tag":"image-text-to-text","model_suggested_tasks":["text-generation"]}):
+            result = (await self.call(function, self.request(), self.inputs(function)))[0]
+        self.assertIn("text-generation", self.returned(function, result, "task_help"))
+        self.assertIn("do not prove", self.returned(function, result, "task_help"))
+
+    async def test_private_auto_backup_cannot_use_implicit_owner_credentials(self):
+        with patch.object(self.app.hub, "token_for", return_value=False), patch.object(self.app.runtime, "begin") as begin:
+            result = (await self.call("run", self.request(), self.inputs("run", {"patch_backup":True,"patch_repo":"visitor/private"}, valid=True)))[0]
+        begin.assert_not_called()
+        self.assertIn("session Hugging Face token", self.returned("run", result, "error_review"))
+
+    async def test_patch_only_result_does_not_offer_model_publication(self):
+        run, state = self.fixture_run(finished=True)
+        (run.output / "patches").mkdir()
+        (run.output / "report.json").write_text('{"checkpoint":null}')
+        with patch.dict(self.app.runtime.RUNS, {run.id:run}, clear=True):
+            result = (await self.call("advance", self.request()))[0]
+        self.assertFalse(self.returned("advance", result, "publish_model_button")["interactive"])
+        self.assertTrue(self.returned("advance", result, "publish_patches_button")["interactive"])
+
+    async def test_target_navigation_validates_model_before_behaviour(self):
+        function = self.callback("next_behaviour")
+        invalid = (await self.call(function, self.request(), self.inputs(function, {"model": None})))[0]
+        self.assertIn("Choose a base model", self.returned(function, invalid, "error_target"))
+        valid = (await self.call(function, self.request(), self.inputs(function)))[0]
+        self.assertEqual(self.returned(function, valid, "setup_tabs")["selected"], "behaviour")
+
+    async def test_behaviour_preset_preserves_selected_target_model(self):
+        function = self.callback("preset", "input", "preset_changed")
+        model = self.controls["model"]
+        before = model.value
+        model.value = "google/gemma-3-1b-it"
+        try:
+            result = (await self.call(function, self.request(), self.inputs(function, {"preset": "greetings"})))[0]
+            update = self.returned(function, result, "model")
+            self.assertNotIn("value", update)
+            self.assertEqual(model.value, "google/gemma-3-1b-it")
+        finally:
+            model.value = before
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -66,7 +151,7 @@ class AppRequestTests(unittest.IsolatedAsyncioTestCase):
     def inputs(self, function, overrides=None, valid=False):
         function = self.callbacks[function] if isinstance(function, str) else function
         values = {component: component.value for component in function.inputs}
-        updates = {"goal": "Answer greetings with Salve!", "dataset_source": "openai/gsm8k",
+        updates = {"hf_task": "text-generation", "goal": "Answer greetings with Salve!", "dataset_source": "openai/gsm8k",
                    "dataset_config": "main", "prompt_field": "question", "target_field": "answer",
                    "api_key": "visitor-editor-key"} if valid else {}
         updates.update(overrides or {})
@@ -167,6 +252,7 @@ class AppRequestTests(unittest.IsolatedAsyncioTestCase):
     async def test_completion_stops_timer_and_enables_saved_results(self):
         run, _ = self.fixture_run(finished=True)
         (self.output / "report.json").write_text("{}")
+        (self.output / "checkpoint").mkdir(exist_ok=True)
         (self.output / "trajectory.jsonl").write_text("{}\n")
         with patch.dict(self.app.runtime.RUNS, {run.id: run}, clear=True):
             results = await self.call("advance", self.request())
@@ -240,7 +326,7 @@ class AppRequestTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(self.controls["goal"],function.outputs)
 
     def preview_result(self,split="train"):
-        return {"repo":"openai/gsm8k","config":"main","split":split,"configs":["main"],
+        return {"task_metadata":{"selected_task":"text-generation","suggested_tasks":["text-generation"]}, "repo":"openai/gsm8k","config":"main","split":split,"configs":["main"],
                 "splits":["train","test"],"prompt_field":"question","target_field":"answer",
                 "rows":[{"question":"Question?","answer":"Answer"}],
                 "mapped_rows":[{"row_index":0,"prompt":"Question?","target":"Answer"}]}
@@ -366,14 +452,14 @@ class AppRequestTests(unittest.IsolatedAsyncioTestCase):
         self.session[self.controls["test_preview_state"]._id] = dict(old)
         with patch.object(self.app.hub, "preview", return_value=self.preview_result()):
             changed = (await self.call(function, self.request(), self.inputs(function, {
-                "dataset_source": "openai/gsm8k", "prompt_field": None, "target_field": None,
+                "hf_task": "text-generation", "dataset_source": "openai/gsm8k", "prompt_field": None, "target_field": None,
             })))[0]
         self.assertEqual(self.session[self.controls["test_preview_state"]._id], {})
         self.assertIn("Refresh", self.returned(function, changed, "test_preview_html"))
         self.session[self.controls["test_preview_state"]._id] = dict(old)
         with patch.object(self.app.hub, "preview", return_value=self.preview_result()):
             unchanged = (await self.call(function, self.request(), self.inputs(function, {
-                "dataset_source": "openai/gsm8k", "prompt_field": "question", "target_field": "answer",
+                "hf_task": "text-generation", "dataset_source": "openai/gsm8k", "prompt_field": "question", "target_field": "answer",
             })))[0]
         self.assertEqual(self.session[self.controls["test_preview_state"]._id], old)
         skipped = self.returned(function, unchanged, "test_preview_html")
@@ -384,7 +470,7 @@ class AppRequestTests(unittest.IsolatedAsyncioTestCase):
         function = self.callbacks["preview_dataset"]
         with patch.object(self.app.hub, "preview", return_value=self.preview_result()):
             await self.call(function, self.request(), self.inputs(function, {
-                "dataset_source": "openai/gsm8k", "text_field": "",
+                "hf_task": "text-generation", "dataset_source": "openai/gsm8k", "text_field": "",
             }))
         preview = dict(self.session[self.controls["preview_state"]._id])
         function = self.callback("next_editor")

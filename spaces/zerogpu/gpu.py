@@ -34,17 +34,22 @@ for _worker_dir in (Path(__file__).parent / "core", Path(__file__).parent / "pyt
 from worker import Engine, load_model_components
 
 
-SUPPORTED_MODELS = ("Qwen/Qwen3.5-0.8B", "google/gemma-3-1b-it")
+SUPPORTED_MODELS = ("Qwen/Qwen3.5-0.8B", "google/gemma-3-1b-it")  # Verified shortlist, not a compatibility whitelist.
+TESTED_MODELS = {
+    "Qwen/Qwen3.5-0.8B": {"revision": "2fc06364715b967f1860aea9cf38778875588b17", "checks": "CUDA token-row editing, rollback and reload"},
+    "google/gemma-3-1b-it": {"revision": "dcc83ea841ab6100d6b47a070329e1ba4cf78752", "checks": "CUDA low-rank editing, rollback and reload; newer primitives not model-specifically verified"},
+}
+
 MAX_EXAMPLES = int(os.environ.get("VESPASIAN_SPACE_MAX_EXAMPLES", "16"))
 MAX_TOTAL_EXAMPLES = int(os.environ.get("VESPASIAN_SPACE_MAX_TOTAL_EXAMPLES", "256"))
 MAX_NEW_TOKENS = int(os.environ.get("VESPASIAN_SPACE_MAX_NEW_TOKENS", "128"))
 MAX_SEQ_LENGTH = int(os.environ.get("VESPASIAN_SPACE_MAX_SEQ_LENGTH", "1024"))
 _FORMAT = 1
 _GENERATION = re.compile(r"[0-9a-f]{32}\Z")
-_COMMANDS = {"init", "evaluate", "health", "edit", "accept", "rollback", "save", "shutdown"}
+_COMMANDS = {"init", "inspect", "evaluate", "health", "edit", "accept", "rollback", "save", "shutdown", "patch_init", "patch_candidate", "patch_finalize", "patch_restore", "patch_export"}
 _ENGINE_FIELDS = (
     "dataset", "pending_details", "original_hashes", "source_files", "max_seq_length",
-    "device", "health_set", "dataset_mode", "seed",
+    "device", "health_set", "dataset_mode", "seed", "inspected_token_ids", "prompt_format",
 )
 
 
@@ -62,11 +67,14 @@ def _preload_models():
     identifiers = tuple(dict.fromkeys(part.strip() for part in os.environ.get(
         "VESPASIAN_SPACE_MODELS", SUPPORTED_MODELS[0],
     ).split(",") if part.strip()))
-    if not identifiers or any(identifier not in SUPPORTED_MODELS for identifier in identifiers):
-        raise ValueError("VESPASIAN_SPACE_MODELS must contain supported model identifiers")
+    if not identifiers or len(identifiers) > 8 or any(not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", identifier) or ".." in identifier for identifier in identifiers):
+        raise ValueError("VESPASIAN_SPACE_MODELS must contain one to eight Hub repository IDs configured by the operator")
     revisions = json.loads(os.environ.get("VESPASIAN_SPACE_MODEL_REVISIONS", "{}"))
-    if not isinstance(revisions, dict) or any(key not in SUPPORTED_MODELS or not isinstance(value, str) for key, value in revisions.items()):
-        raise ValueError("VESPASIAN_SPACE_MODEL_REVISIONS must map supported models to revisions")
+    if not isinstance(revisions, dict) or any(key not in identifiers or not isinstance(value, str) for key, value in revisions.items()):
+        raise ValueError("VESPASIAN_SPACE_MODEL_REVISIONS must map configured models to revisions")
+    parameter_limit = int(os.environ.get("VESPASIAN_SPACE_MAX_MODEL_PARAMETERS", "2000000000"))
+    if parameter_limit < 1:
+        raise ValueError("VESPASIAN_SPACE_MAX_MODEL_PARAMETERS must be positive")
     templates = {}
     for identifier in identifiers:
         if os.environ.get("VESPASIAN_SPACE_SKIP_MODEL_LOAD") == "1":
@@ -79,6 +87,8 @@ def _preload_models():
             device = "cuda" if torch.cuda.is_available() else "cpu"
             dtype = torch.bfloat16 if device == "cuda" else torch.float32
             model, tokenizer, processor = load_model_components(identifier, revision=revision, device=device, dtype=dtype)
+            if sum(parameter.numel() for parameter in model.parameters()) > parameter_limit:
+                raise ValueError("Loaded model exceeds the operator-configured parameter limit")
             templates[identifier] = ModelTemplate(identifier, revision, model, tokenizer, processor)
         except Exception as error:
             print(f"Startup model {identifier} unavailable: {error}", file=sys.stderr)
@@ -95,10 +105,15 @@ MODEL_TEMPLATES = _preload_models()
 def model_availability():
     """Return startup metadata without allocating a GPU or reading model tensors."""
     return [
-        {"id": item.identifier, "revision": item.revision, "available": item.model is not None,
+        {"id": item.identifier, "revision": item.revision, "available": item.model is not None, "tested_reference": TESTED_MODELS.get(item.identifier),
          **({"error": item.error} if item.error else {})}
         for item in MODEL_TEMPLATES.values()
     ]
+
+
+def model_options():
+    """Configured startup options; availability is validated separately, never downloaded per session."""
+    return [(item.identifier, item.identifier) for item in MODEL_TEMPLATES.values()]
 
 
 def _model_loader(identifier, *, revision, device, dtype):
@@ -207,11 +222,19 @@ def _engine_snapshot(engine, loader, *, include_tensors=True):
         "changed": sorted(engine.changed),
         "pending_names": sorted(engine.pending),
         "encoded": [[*key, prompt, target] for key, (prompt, target) in engine.encoded.items()],
+        "row_changed": {name: sorted(ids) for name, ids in engine.row_changed.items()},
+        "row_pending_ids": {name: list(value["ids"]) for name, value in engine.row_pending.items()},
+        "row_current_ids": {name: sorted(engine.row_changed.get(name, set()) | set(engine.row_pending.get(name, {}).get("ids", [])))
+                            for name in set(engine.row_changed) | set(engine.row_pending)},
     })
     tensors = None
     if include_tensors:
         tensors = {"current." + name: engine.editable[name].detach().cpu().clone() for name in engine.changed | set(engine.pending)}
         tensors.update({"pending." + name: value.detach().cpu().clone() for name, value in engine.pending.items()})
+        for name, ids in metadata["engine"]["row_current_ids"].items():
+            table = engine.token_tables[name]
+            tensors["row.current." + name] = table.index_select(0, torch.tensor(ids, device=table.device)).detach().cpu().clone()
+        tensors.update({"row.pending." + name: value["values"].detach().cpu().clone() for name, value in engine.row_pending.items()})
     return metadata, tensors
 
 
@@ -221,14 +244,19 @@ def _restore_engine(metadata, tensors, emit):
     engine.model, engine.tokenizer, engine.processor = _model_loader(
         loader["identifier"], revision=loader["revision"], device=loader["device"], dtype=getattr(torch, loader["dtype"]),
     )
+    engine.load_dtype = loader["dtype"]
     stored = metadata["engine"]
     for name in _ENGINE_FIELDS:
-        setattr(engine, name, copy.deepcopy(stored[name]))
+        setattr(engine, name, copy.deepcopy(stored.get(name, getattr(engine, name))))
     engine.source_dir = Path(stored["source_dir"]) if stored["source_dir"] else None
     engine.changed = set(stored["changed"])
     engine.encoded = {tuple(item[:3]): (item[3], item[4]) for item in stored["encoded"]}
-    engine.editable = {name: parameter for name, parameter in engine.model.named_parameters() if name.endswith(".mlp.down_proj.weight")}
+    engine.register_editable()
+    engine.row_changed = {name: set(ids) for name, ids in stored.get("row_changed", {}).items()}
+    row_current = stored.get("row_current_ids", {})
+    row_pending = stored.get("row_pending_ids", {})
     expected = {"current." + name for name in engine.changed | set(stored["pending_names"])} | {"pending." + name for name in stored["pending_names"]}
+    expected |= {"row.current." + name for name in row_current} | {"row.pending." + name for name in row_pending}
     if set(tensors) != expected:
         raise ValueError("Model snapshot tensor names do not match its metadata")
     with torch.no_grad():
@@ -237,6 +265,21 @@ def _restore_engine(metadata, tensors, emit):
             if target.shape != value.shape or target.dtype != value.dtype:
                 raise ValueError("Model snapshot tensor shape or dtype does not match its source")
             target.copy_(value)
+        for name, ids in row_current.items():
+            if name not in engine.token_tables:
+                raise ValueError("Snapshot token table is unavailable")
+            table, value = engine.token_tables[name], tensors["row.current." + name]
+            if (not ids or len(set(ids)) != len(ids) or any(isinstance(i, bool) or not isinstance(i, int) or not 0 <= i < table.shape[0] for i in ids)
+                    or value.shape != (len(ids), table.shape[1]) or value.dtype != table.dtype or not torch.isfinite(value).all()):
+                raise ValueError("Invalid sparse token-row snapshot")
+            table.index_copy_(0, torch.tensor(ids, device=table.device), value.to(table.device))
+        for name, ids in row_pending.items():
+            if name not in row_current or any(i not in row_current[name] for i in ids):
+                raise ValueError("Pending token rows are missing from snapshot")
+            value, table = tensors["row.pending." + name], engine.token_tables[name]
+            if len(set(ids)) != len(ids) or value.shape != (len(ids), table.shape[1]) or value.dtype != table.dtype or not torch.isfinite(value).all():
+                raise ValueError("Invalid pending token-row snapshot")
+            engine.row_pending[name] = {"ids": list(ids), "values": value.clone()}
     engine.pending = {name: tensors["pending." + name].clone() for name in stored["pending_names"]}
     return engine
 
@@ -275,6 +318,8 @@ def estimate_duration(state_dir: str, request: dict):
     VESPASIAN_SPACE_SECONDS_PER_TOKEN can be tuned from measured acceptance runs.
     """
     command = request.get("command")
+    if command in {"inspect", "patch_init", "patch_candidate", "patch_finalize", "patch_restore", "patch_export"}:
+        return 20
     if command == "save":
         return 90
     if command == "init":
@@ -315,7 +360,8 @@ def _cpu_transition(command, metadata, tensors):
         return {"stopped": True}
     state = metadata["engine"]
     pending = state["pending_names"]
-    if command == "accept" and not pending:
+    row_pending = state.get("row_pending_ids", {})
+    if command == "accept" and not pending and not row_pending:
         raise ValueError("No edit is waiting to be accepted")
     changed = set(state["changed"])
     for name in pending:
@@ -331,7 +377,31 @@ def _cpu_transition(command, metadata, tensors):
     for name in pending:
         if name not in changed:
             tensors.pop("current." + name, None)
-    state.update(changed=sorted(changed), pending_names=[], pending_details=[])
+    row_changed = {name: set(ids) for name, ids in state.get("row_changed", {}).items()}
+    row_current = state.get("row_current_ids", {})
+    for name, ids in row_pending.items():
+        current = {token_id: value.clone() for token_id, value in zip(row_current[name], tensors["row.current." + name])}
+        retained = row_changed.setdefault(name, set())
+        for token_id, original in zip(ids, tensors["row.pending." + name]):
+            if command == "accept":
+                if not torch.equal(current[token_id], original):
+                    retained.add(token_id)
+            elif token_id in retained:
+                current[token_id] = original.clone()
+            else:
+                current.pop(token_id)
+        tensors.pop("row.pending." + name)
+        kept_ids = sorted(retained)
+        if kept_ids:
+            row_current[name] = kept_ids
+            tensors["row.current." + name] = torch.stack([current[token_id] for token_id in kept_ids])
+        else:
+            row_current.pop(name, None)
+            row_changed.pop(name, None)
+            tensors.pop("row.current." + name, None)
+    state.update(changed=sorted(changed), pending_names=[], pending_details=[],
+                 row_pending_ids={}, row_current_ids=row_current,
+                 row_changed={name: sorted(ids) for name, ids in row_changed.items()})
     return {"accepted": True} if command == "accept" else {"restored": True}
 
 
@@ -375,10 +445,17 @@ def _execute(state_dir, request, emit, cancelled):
         if command == "shutdown" and metadata is None:
             return {"type": "result", "id": request.get("id"), "ok": True, "data": {"stopped": True}}
         model_version = (metadata or {}).get("model_version")
-        if command in {"accept", "rollback", "shutdown"}:
+        if command in {"accept", "rollback", "shutdown", "patch_finalize", "patch_export"}:
             if metadata is None:
                 raise ValueError("Load a model before starting this operation")
-            data = _cpu_transition(command, metadata, tensors)
+            if command == "patch_finalize":
+                import patches
+                data = patches.finalize(request["directory"], request["turn"], request["accepted"])
+            elif command == "patch_export":
+                import patches
+                data = patches.export_bundle(request["directory"], request["path"])
+            else:
+                data = _cpu_transition(command, metadata, tensors)
         else:
             if command == "init":
                 if metadata is not None:
@@ -392,13 +469,13 @@ def _execute(state_dir, request, emit, cancelled):
                 engine = _restore_engine(metadata, tensors, record)
                 data = _engine_command(engine, request)
                 loader = metadata["loader"]
-            metadata, changed_tensors = _engine_snapshot(engine, loader, include_tensors=command in {"init", "edit"})
+            metadata, changed_tensors = _engine_snapshot(engine, loader, include_tensors=command in {"init", "edit", "patch_restore"})
             if changed_tensors is not None:
                 tensors = changed_tensors
-        metadata["model_version"] = uuid.uuid4().hex if command in {"init", "edit", "accept", "rollback"} else model_version
+        metadata["model_version"] = uuid.uuid4().hex if command in {"init", "edit", "accept", "rollback", "patch_restore"} else model_version
         result = _plain({"type": "result", "id": request.get("id"), "ok": True, "data": data})
         metadata["last_request"] = {"request": request, "events": events, "result": result}
-        reuse_tensors = previous_location / "tensors.safetensors" if previous_location and command in {"evaluate", "health", "save", "shutdown"} else None
+        reuse_tensors = previous_location / "tensors.safetensors" if previous_location and command in {"inspect", "evaluate", "health", "save", "shutdown", "patch_init", "patch_candidate", "patch_finalize", "patch_export"} else None
         _commit_snapshot(directory, metadata, tensors, cancelled, reuse_tensors=reuse_tensors)
         return result
 
@@ -556,7 +633,7 @@ def dispatch(state_dir: str, request: dict, *, boundaries=False):
     try:
         if not isinstance(request, dict):
             raise ValueError("Worker requests must be objects")
-        if request.get("command") in {"accept", "rollback", "shutdown"}:
+        if request.get("command") in {"accept", "rollback", "shutdown", "patch_finalize", "patch_export"}:
             yield from _stream(state_dir, request)
         elif request.get("command") in {"evaluate", "health"}:
             yield from _batched_dispatch(state_dir, request, boundaries=boundaries)

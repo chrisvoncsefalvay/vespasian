@@ -78,7 +78,7 @@ def _replay(state: dict) -> dict:
         "retained_turn": 0, "structure": {}, "tensor": {}, "assessment": "", "plan": "",
         "current": 0, "total": 0, "spent_usd": None, "turn": 0,
         "input_tokens": 0, "output_tokens": 0, "status": "idle",
-        "has_baseline": False,
+        "has_baseline": False, "loop_stages": {}, "agent_tools": {},
         "health_max_drop": config.get("health_max_drop"),
         "report": _dict(state.get("report")),
     }
@@ -86,10 +86,39 @@ def _replay(state: dict) -> dict:
         event = _dict(raw_event)
         kind = event.get("type")
         if kind == "start":
-            for key in ("model", "goal", "budget_usd", "max_turns", "editor", "budget_mode"):
+            for key in ("model", "goal", "budget_usd", "max_turns", "editor", "budget_mode", "budget_policy"):
                 if key in event:
                     view[key] = event[key]
             view["status"] = "running"
+        elif kind == "loop_stage":
+            stage, status = event.get("stage"), event.get("status")
+            if stage in {"assess", "inspect", "plan", "patch", "test", "decide"} and status in {"started", "completed", "failed", "skipped"}:
+                # Explicit controller receipts only. Seeing a later stage does
+                # not prove an earlier stage ran or completed successfully.
+                turn = _int(event.get("turn"))
+                view["loop_stages"].setdefault(turn, {})[stage] = {
+                    "status": status, "summary": event.get("summary", ""),
+                    "details": _dict(event.get("details")),
+                }
+                details = _dict(event.get("details"))
+                if turn > 0 and status == "completed" and stage in {"plan", "patch", "test", "decide"}:
+                    change = view["changes"].setdefault(turn, {"turn": turn, "parent_turn": view["retained_turn"], "accepted": None, "proposal": {}, "metrics": {}})
+                    for key in {"plan": ("proposal",), "patch": ("mutation",), "test": ("metrics", "health", "health_passed"), "decide": ("decision_reason",)}[stage]:
+                        if key in details:
+                            change[key] = details[key]
+                    if stage == "decide" and isinstance(details.get("accepted"), bool):
+                        change["accepted"] = details["accepted"]
+        elif kind == "agent_tool":
+            # Render only the controller's public receipt, never request/result
+            # payloads or arbitrary nested evidence from an editor response.
+            status = event.get("status")
+            if status in {"started", "completed", "failed"}:
+                turn = _int(event.get("turn"))
+                call_id = str(event.get("call_id", f"tool-{len(view['agent_tools'])}"))
+                view["agent_tools"][(turn, call_id)] = {
+                    "turn": turn, "tool": event.get("tool", ""),
+                    "status": status, "summary": event.get("summary", ""),
+                }
         elif kind in ("phase", "progress"):
             for key in ("phase", "message"):
                 if event.get(key):
@@ -156,7 +185,7 @@ def _replay(state: dict) -> dict:
                 view["turns"].append(event)
                 view["tensor"] = {}
                 view["current"] = view["total"] = 0
-                view["phase"] = f"Turn {turn} {'retained' if accepted else 'reverted'}"
+                view["phase"] = f"Turn {turn} {_decision(view, turn, change).lower()}"
                 view["message"] = event.get("decision_reason", "")
                 if accepted:
                     view["retained_turn"] = turn
@@ -313,19 +342,140 @@ def _difference(before: float | None, after: float | None, metric: str = "score"
     return f"{difference:+.4f}" if metric == "loss" else f"{difference*100:+.1f} pp"
 
 
+def _decision(view: dict, turn: int, change: dict) -> str:
+    stages = view["loop_stages"].get(turn, {})
+    if change.get("accepted") is True:
+        return "Retained"
+    if change.get("accepted") is False:
+        # Legacy runs have candidate metrics but no stage receipts. A rejected
+        # proposal without an applied patch must never be labelled reverted.
+        applied = _dict(stages.get("patch")).get("status") == "completed" or bool(change.get("mutation")) or bool(change.get("metrics"))
+        return "Reverted" if applied else "Rejected"
+    if _dict(stages.get("test")).get("status") == "started":
+        return "Testing"
+    if _dict(stages.get("patch")).get("status") == "started":
+        return "Applying"
+    if _dict(stages.get("patch")).get("status") == "completed":
+        return "Patched candidate"
+    return "Planned"
+
+
+def _edit_loop(view: dict, selection: dict) -> str:
+    turn = max([selection["turn"], *view["loop_stages"], *(key[0] for key in view["agent_tools"])]) if selection["follow"] else selection["turn"]
+    stages = view["loop_stages"].get(turn, {})
+    labels = (("assess", "Assess current state"), ("inspect", "Inspect the model"),
+              ("plan", "Choose a patch"), ("patch", "Apply the candidate"),
+              ("test", "Test the candidate"), ("decide", "Keep or revert"))
+    items = []
+    terminal = view["status"] in {"complete", "stopped", "error", "cancelled"}
+    for index, (stage, label) in enumerate(labels, 1):
+        record = _dict(stages.get(stage))
+        state = record.get("status", "pending")
+        status_label = {"pending": "Waiting", "started": "In progress", "completed": "Completed", "failed": "Failed", "skipped": "Skipped"}[state]
+        if terminal and state == "started":
+            status_label = "Stopped before completion"
+        summary = record.get("summary") or "No result recorded yet."
+        items.append(f'<li class="vs-loop-stage vs-loop-{state}" data-vs-stage="{stage}" data-vs-stage-status="{state}"><div><span class="vs-loop-number">{index:02d}</span><h4>{label}</h4><span class="vs-loop-status">{status_label}</span></div><p>{_text(summary, 1200)}</p></li>')
+    note = "Candidate patches are tested locally. Only retained changes become the next starting point."
+    if not stages:
+        note = "No step-by-step receipts are available for this selection. Existing measurements remain visible below." if view["changes"] or view["has_baseline"] else "The editor assesses the starting model, proposes a bounded patch, tests it and keeps or reverts it before repeating."
+    return f'<section class="vs-edit-loop" aria-label="Observed editing loop"><div class="vs-section-heading"><h3>The measured edit loop</h3><span class="vs-kicker">{_turn_name(turn).upper()}</span></div><p class="vs-loop-note">{note}</p><ol>{"".join(items)}</ol>{_agent_tool_activity(view, turn)}{_inspection_summary(view, turn)}</section>'
+
+
+
+def _agent_tool_activity(view: dict, turn: int) -> str:
+    records = [record for record in view["agent_tools"].values() if record["turn"] == turn]
+    if not records:
+        return ""
+    labels = {"read_skill": "Read strategy skill", "inspect_targets": "Inspect edit targets",
+              "inspect_tokens": "Inspect token candidates", "read_history": "Review measured rounds",
+              "read_rollouts": "Examine generated answers"}
+    terminal = view["status"] in {"complete", "stopped", "error", "cancelled"}
+    items = []
+    for record in records[-12:]:
+        tool, status = str(record["tool"]), record["status"]
+        state = {"started": "In progress", "completed": "Completed", "failed": "Failed"}[status]
+        if terminal and status == "started":
+            state = "Stopped before completion"
+        summary = record["summary"] or "No result summary recorded."
+        items.append(f'<li data-vs-tool="{_text(tool, 80)}" data-vs-tool-status="{status}"><div><strong>{_text(labels.get(tool, tool.replace("_", " ")), 100)}</strong><span>{state}</span></div><p>{_text(summary, 600)}</p></li>')
+    more = f" Showing the latest 12 of {len(records)} tool receipts for this turn." if len(records) > 12 else ""
+    return f'<div class="vs-agent-tools" aria-label="Agent skill and tool activity"><h4>Skills and inspection tools</h4><p>The editor requests relevant guidance and evidence as needed. These read-only tools do not apply a patch.{more}</p><ul>{"".join(items)}</ul></div>'
+
+
+def _inspection(view: dict, turn: int) -> dict:
+    for index in (turn, 0):
+        details = _dict(_dict(view["loop_stages"].get(index, {}).get("inspect")).get("details"))
+        if isinstance(details.get("inspection"), dict):
+            return details["inspection"]
+    return {}
+
+
+def _inspection_summary(view: dict, turn: int) -> str:
+    inspection = _inspection(view, turn)
+    tables = [_dict(item) for item in _list(inspection.get("token_tables"))]
+    if not tables:
+        return ""
+    rows = []
+    for table in tables:
+        roles = ", ".join(str(role).replace("_", " ") for role in _list(table.get("roles")))
+        tied = "Shared input/output weights" if table.get("tied") else "Independent weights"
+        rows.append(f'<tr><td><code>{_text(table.get("name"))}</code></td><td>{_text(roles)}</td><td>{_text(tied)}</td></tr>')
+    candidates = [_dict(item) for item in _list(inspection.get("token_candidates"))]
+    tokens = " · ".join(f'{_int(item.get("id"))}: <code>{_text(item.get("piece") or item.get("text"))}</code>' for item in candidates[:24])
+    more = f" Showing 24 of {len(candidates)} inspected candidates." if len(candidates) > 24 else ""
+    return f'<details class="vs-model-inspection" data-vs-details="inspection-{turn}"><summary>Observed token tables and tokenisation</summary><div class="vs-table-scroll"><table><thead><tr><th>Tensor</th><th>Role</th><th>Sharing</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div><p>Token candidates from the permitted editing context.{more}</p><p>{tokens or "No editable token candidates were reported."}</p></details>'
+
+
+def _row_details(view: dict, turn: int, proposal: dict, mutation: dict) -> str:
+    changed = [_dict(item) for item in _list(mutation.get("changed_tensors"))]
+    row_edits = [item for item in changed if _list(item.get("rows"))]
+    candidates = {_int(item.get("id")): item for item in (_dict(row) for row in _list(_inspection(view, turn).get("token_candidates")))}
+    sections = []
+    for item in row_edits:
+        rows = []
+        for raw in _list(item.get("rows")):
+            row = _dict(raw)
+            source_id = row.get("source_token_id")
+            source = "—" if source_id is None else f'{_text(source_id)}: <code>{_text(row.get("source_text"))}</code>'
+            rows.append(f'<tr><td>{_text(row.get("token_id"))}</td><td><code>{_text(row.get("piece") or row.get("text"))}</code></td><td>{source}</td><td>{_text(row.get("effective_fraction"))}</td><td>{_fmt(_number(row.get("relative_norm")))}</td></tr>')
+        tied = '<p class="vs-tied-note">These rows share input embedding and output weights. One physical change affects both roles.</p>' if item.get("tied") else ""
+        sections.append(f'<div class="vs-token-rows"><h4>Measured token-row patch</h4><p><code>{_text(item.get("name"))}</code></p>{tied}<div class="vs-table-scroll"><table><thead><tr><th>Token ID</th><th>Tokenizer piece</th><th>Source row</th><th>Applied fraction</th><th>Stored row change</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div></div>')
+    if not sections and _list(proposal.get("token_ids")):
+        tokens = []
+        sources = _list(proposal.get("source_token_ids"))
+        for index, identifier in enumerate(proposal["token_ids"]):
+            candidate = candidates.get(_int(identifier), {})
+            source = f' ← source {_text(sources[index])}' if index < len(sources) else ""
+            tokens.append(f'<li>Token {_text(identifier)} <code>{_text(candidate.get("piece") or candidate.get("text"))}</code>{source}</li>')
+        sections.append(f'<div class="vs-token-rows"><h4>Planned token rows</h4><p>These selectors describe the proposal; a stored patch has not been recorded yet.</p><ul>{"".join(tokens)}</ul></div>')
+    return "".join(sections)
+
+
+def _budget_note(view: dict) -> str:
+    mode = view.get("budget_mode") or _dict(view.get("report", {}).get("budget")).get("mode")
+    if mode == "estimated_between_calls":
+        text = "Login-based editor: estimated spending is checked between calls. A call can exceed the remaining estimate; this is not a hard dollar cap."
+    elif mode == "reserved_api":
+        text = "API editor: each call reserves its maximum estimated cost at the configured token rates before it starts. GPU quota is separate."
+    else:
+        return ""
+    return f'<p class="vs-budget-mode">{text}</p>'
+
+
 def _turn_inspector(view: dict, selection: dict) -> str:
     turn = selection["turn"]
     metric = view["metric"]
     if turn == 0:
         count = _dict(view["baseline"].get("validation")).get("count")
         note = f"Measured on {_int(count)} validation examples." if _number(count) is not None else "The original checkpoint is the reference for this experiment."
-        return f'<section class="vs-turn-inspector" aria-label="Selected turn"><div class="vs-section-heading"><h3>Baseline</h3><span class="vs-kicker">ORIGINAL CHECKPOINT</span></div><p>{note}</p></section>'
+        return f'<section class="vs-turn-inspector" aria-label="Selected turn"><div class="vs-section-heading"><h3>Baseline</h3><span class="vs-kicker">ORIGINAL CHECKPOINT</span></div><p>{note}</p>{f'<p><strong>Dataset assessment:</strong> {_text(view["assessment"])}</p>' if view["assessment"] else ""}{f'<p><strong>Evaluation plan:</strong> {_text(view["plan"])}</p>' if view["plan"] else ""}</section>'
     change = view["changes"].get(turn, {})
     parent = _int(change.get("parent_turn"))
     proposal = _dict(change.get("proposal"))
     mutation = _dict(change.get("mutation"))
     accepted = change.get("accepted")
-    decision = "Retained" if accepted is True else "Reverted" if accepted is False else "Evaluating"
+    decision = _decision(view, turn, change)
     before = _metrics_for(view, parent)
     after = _dict(change.get("metrics"))
     rows = []
@@ -342,8 +492,15 @@ def _turn_inspector(view: dict, selection: dict) -> str:
     duration = _number(mutation.get("elapsed_seconds"))
     if duration is not None:
         settings.append(f"Tensor update {duration:.3f}s")
-    reason = change.get("decision_reason") or "The candidate is being evaluated against its parent checkpoint."
+    reason = change.get("decision_reason") or ("The patch is planned; no completed candidate test has been recorded." if decision == "Planned" else "The candidate is being tested against the retained checkpoint.")
     rationale = proposal.get("rationale") or change.get("rationale")
+    explanation = "".join(
+        f'<p class="vs-editor-rationale"><strong>{label}:</strong> {_text(proposal.get(field))}</p>'
+        for field, label in (("strategy", "Strategy"), ("plan", "Plan"), ("rationale", "Rationale"), ("reflection", "Reflection"))
+        if proposal.get(field)
+    )
+    if not proposal.get("rationale") and rationale:
+        explanation += f'<p class="vs-editor-rationale"><strong>Rationale:</strong> {_text(rationale)}</p>'
     targets = _list(mutation.get("changed_tensors"))
     if targets:
         target_rows = "".join(f'<tr><td><code>{_text(_dict(item).get("name"))}</code></td><td>{_text(" × ".join(str(v) for v in _list(_dict(item).get("shape"))))}</td><td>{_fmt(_number(_dict(item).get("relative_norm")))}</td></tr>' for item in targets)
@@ -360,12 +517,12 @@ def _turn_inspector(view: dict, selection: dict) -> str:
     if isinstance(change.get("health_passed"), bool) and view["health_max_drop"] is not None:
         health_verdict = '<p class="vs-health-verdict">' + ("Preservation limits passed." if change["health_passed"] else "A preservation limit was exceeded.") + '</p>'
     return f'''<section class="vs-turn-inspector" aria-label="Selected turn">
-      <div class="vs-section-heading"><h3>Turn {turn}</h3><span class="vs-decision-label vs-decision-{decision.lower()}">{decision}</span></div>
+      <div class="vs-section-heading"><h3>Turn {turn}</h3><span class="vs-decision-label vs-decision-{decision.lower().replace(" ", "-")}">{decision}</span></div>
       <p class="vs-parent">Parent: {_turn_name(parent)} · {_text(operation)}</p>
       <p class="vs-decision">{_text(reason)}</p>
       <div class="vs-table-scroll"><table><caption>Validation comparison</caption><thead><tr><th>Metric</th><th>Parent</th><th>Candidate</th><th>Change</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>
       {health_table}{health_verdict}<p class="vs-operation-settings">{" · ".join(settings)}</p>
-      {f'<p class="vs-editor-rationale">{_text(rationale)}</p>' if rationale else ""}{tensors}
+      {explanation}{_row_details(view, turn, proposal, mutation)}{tensors}
     </section>'''
 
 
@@ -387,6 +544,8 @@ def _layers(view: dict, selection: dict) -> str:
         kind = "active" if layer == active_layer else "selected" if layer in selected else "untouched"
         cells.append(f'<span class="vs-layer vs-layer-{kind}" aria-label="Layer {layer}: {kind}" title="Layer {layer}: {kind}">{layer:02d}</span>')
     detail = f'<p class="vs-tensor-name">Editing {_text(active_tensor.get("tensor"))}</p>' if active_layer is not None else ""
+    if _list(_dict(change.get("proposal")).get("token_ids")):
+        detail += '<p class="vs-tensor-name">This candidate targets token-table rows, not a transformer layer. Inspect its row IDs and shared-weight effects beside the map.</p>'
     return f'<section class="vs-layers">{heading}<div class="vs-layer-map">{"".join(cells)}</div><div class="vs-legend"><span><i class="vs-swatch vs-swatch-active"></i>Editing now</span><span><i class="vs-swatch vs-swatch-selected"></i>Selected turn</span><span><i class="vs-swatch"></i>Unchanged in this turn</span></div>{detail}</section>'
 
 
@@ -528,7 +687,7 @@ def _genealogy(view: dict, selection: dict) -> str:
     all_changes = [{"turn": 0, "accepted": True}, *changes]
     for change in all_changes:
         turn, parent = _int(change.get("turn")), _int(change.get("parent_turn"))
-        status = "baseline" if turn == 0 else "retained" if change.get("accepted") is True else "reverted" if change.get("accepted") is False else "proposed"
+        status = "baseline" if turn == 0 else _decision(view, turn, change).lower()
         x,y = positions[turn]
         if turn and parent in positions:
             px,py = positions[parent]
@@ -608,6 +767,24 @@ def _completion(view: dict) -> str:
     return f'<section class="vs-result-summary" aria-label="Completed experiment results"><div class="vs-section-heading"><h2>Experiment results</h2><span class="vs-kicker">RETAINED {_turn_name(best_turn).upper()}</span></div><p>{_text(reason)}. {reload_text}.</p><div class="vs-table-scroll"><table><caption>{_text(_metric_name(metric))}</caption><thead><tr><th>Dataset</th><th>Examples</th><th>Baseline</th><th>Retained</th><th>Change</th><th>Reference loss</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>{test_note}{scoring_error}<div class="vs-result-grid"><div><h3>Preservation</h3><ul>{"".join(health)}</ul></div><div><h3>Saved checkpoint</h3><p>{_turn_name(best_turn)} · {spend} frontier spend</p><p>{_text(str(report.get("checkpoint") or "checkpoint").replace(chr(92),"/").split("/")[-1])}</p><a href="#vs-results">Download or save this experiment →</a></div></div></section>'
 
 
+def _patch_checkpoint(state: dict) -> str:
+    receipts = [event for event in state.get("events", []) if isinstance(event, dict)
+                and event.get("type") == "patch_checkpoint" and event.get("status") in {"saved", "backed_up", "backup_failed"}]
+    if not receipts:
+        return ""
+    event = receipts[-1]
+    turn = _int(event.get("turn"))
+    status = event["status"]
+    if status == "backed_up":
+        text = f"Round {turn}: latest/best patches backed up privately to {_text(event.get('repo'), 160)}."
+    elif status == "backup_failed":
+        text = "Private patch backup failed. " + ("The local patch checkpoint is retained; download it for recovery." if event.get("local_saved") is True else "Check the local recovery files before continuing.")
+    else:
+        size = _number(event.get("bundle_bytes"))
+        text = f"Round {turn}: latest/best compact patches saved locally" + (f" · {int(size):,} bytes" if size is not None and size >= 0 else "") + "."
+    return '<section class="vs-patch-status" aria-label="Patch recovery status"><strong>' + text + '</strong><p>Local Space storage is temporary. Download patches or use an explicitly authorized private backup to keep them beyond this session.</p></section>'
+
+
 def render_dashboard(state: dict | None = None, selection: dict | None = None) -> str:
     """Render measured events and a selected checkpoint without exposing secrets."""
     state = _dict(state)
@@ -643,6 +820,7 @@ def render_dashboard(state: dict | None = None, selection: dict | None = None) -
       {f'<p class="vs-current-goal"><span>OBJECTIVE</span>{_text(view["goal"])}</p>' if view['goal'] else ''}
       <div class="vs-phase-line"><span>{_text(phase)}</span>{progress}</div><p class="vs-run-message">{_text(view['message'])}</p>
       <div class="vs-telemetry"><div><span class="vs-kicker">EDIT TURNS</span><strong>{len(view['turns'])}<span>/{view['max_turns'] or '—'}</span></strong></div><div><span class="vs-kicker">RETAINED EDITS</span><strong>{accepted}</strong></div><div><span class="vs-kicker">ELAPSED</span><strong>{elapsed_text}</strong></div><div><span class="vs-kicker">FRONTIER SPEND</span><strong>{_money(view['spent_usd'])}<span>/{_money(view['budget_usd'])}</span></strong></div></div>
+      {_budget_note(view)}{_patch_checkpoint(state)}{_edit_loop(view,selection)}
       <section class="vs-objective"><div class="vs-chart-heading"><div><span class="vs-kicker">VALIDATION OBJECTIVE</span><h3>{_text(_metric_name(metric))} {'↓' if metric == 'loss' else '↑'}</h3></div><div class="vs-score-comparison"><div><span>BASELINE</span><strong>{_fmt(a,metric)}</strong></div><b aria-hidden="true">→</b><div><span>RETAINED</span><strong>{_fmt(b,metric)}</strong></div><span class="vs-delta">{_difference(a,b,metric)}</span></div></div>{chart}<div class="vs-chart-footer"><div class="vs-legend"><span><i class="vs-line-swatch"></i>Retained path</span><span><i class="vs-dot-swatch"></i>Reverted trial</span><span><i class="vs-line-swatch vs-baseline-swatch"></i>Baseline</span></div><span class="vs-kicker">EDIT TURN</span></div>{measured}</section>
       <div class="vs-turn-toolbar" aria-label="Inspect a turn"><div>{buttons}</div>{follow}</div>
       <div class="vs-inspector-grid">{_turn_inspector(view,selection)}{_layers(view,selection)}</div>

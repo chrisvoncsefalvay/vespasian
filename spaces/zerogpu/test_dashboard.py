@@ -46,6 +46,16 @@ def state():
             "status": "running", "elapsed": 30}
 
 
+class StrategySummaryTests(unittest.TestCase):
+    def test_explicit_strategy_summaries_are_visible_and_escaped(self):
+        current = state()
+        next(event for event in current["events"] if event["type"] == "proposal")["proposal"].update(strategy="local-sweep", plan="Apply <small> change", reflection="Previous loss decreased")
+        rendered = dashboard.render_dashboard(current, {"turn": 1, "follow": False})
+        for expected in ("Strategy:", "local-sweep", "Plan:", "Apply &lt;small&gt; change", "Reflection:", "Previous loss decreased"):
+            self.assertIn(expected, rendered)
+        self.assertNotIn("Apply <small>", rendered)
+
+
 class Elements(HTMLParser):
     def __init__(self, value):
         super().__init__()
@@ -204,5 +214,124 @@ class DashboardTests(unittest.TestCase):
         self.assertIn('x="58"',rendered)
 
 
+
+class PatchCheckpointTests(unittest.TestCase):
+    def test_only_observed_safe_patch_status_is_rendered(self):
+        self.assertNotIn("Patch recovery status", dashboard.render_dashboard({"events": []}))
+        saved = dashboard.render_dashboard({"events": [{"type":"patch_checkpoint","turn":2,"status":"saved","bundle_bytes":4096,"raw":"PRIVATE"}]})
+        self.assertIn("4,096 bytes", saved)
+        self.assertNotIn("PRIVATE", saved)
+        failed = dashboard.render_dashboard({"events": [{"type":"patch_checkpoint","turn":2,"status":"backup_failed","local_saved":True,"error":"SECRET"}]})
+        self.assertIn("local patch checkpoint is retained", failed)
+        self.assertNotIn("SECRET", failed)
+        backed = dashboard.render_dashboard({"events": [{"type":"patch_checkpoint","turn":2,"status":"backed_up","repo":"<script>unsafe</script>"}]})
+        self.assertIn("backed up privately", backed)
+        self.assertNotIn("<script>", backed)
+
 if __name__ == "__main__":
     unittest.main()
+
+class MeasuredLoopTests(unittest.TestCase):
+    @staticmethod
+    def stage(stage, status='completed', turn=1, **details):
+        return {'type':'loop_stage','stage':stage,'status':status,'turn':turn,'summary':stage+' receipt','details':details}
+
+    def render(self, events, **extra):
+        return dashboard.render_dashboard({'events':events, **extra})
+
+    def test_later_stage_does_not_fabricate_completion(self):
+        html=self.render([self.stage('test','started')])
+        self.assertIn('data-vs-stage="patch" data-vs-stage-status="pending"',html)
+        self.assertIn('data-vs-stage="test" data-vs-stage-status="started"',html)
+
+    def test_rejected_plan_is_not_reverted_patch(self):
+        events=[self.stage('plan',proposal={'operation':'token_row_scale','token_ids':[7]}),self.stage('decide',accepted=False,decision_reason='Unsupported target')]
+        view=dashboard._replay({'events':events})
+        self.assertEqual(dashboard._decision(view,1,view['changes'][1]),'Rejected')
+        events.insert(1,self.stage('patch',mutation={'changed_tensors':[]}))
+        view=dashboard._replay({'events':events})
+        self.assertEqual(dashboard._decision(view,1,view['changes'][1]),'Reverted')
+
+    def test_cancelled_stage_not_claimed_completed(self):
+        html=self.render([self.stage('patch','started')],status='cancelled')
+        self.assertIn('Stopped before completion',html)
+        self.assertIn('data-vs-stage="patch" data-vs-stage-status="started"',html)
+
+    def test_measured_rows_and_shared_weights_are_escaped(self):
+        mutation={'changed_tensors':[{'name':'model.embed_tokens.weight','tied':True,'roles':['input','output'],'rows':[{'token_id':7,'piece':'<unsafe>','text':'hello','source_token_id':8,'effective_fraction':.01,'relative_norm':.01}]}]}
+        events=[self.stage('plan',proposal={'operation':'token_row_blend','token_ids':[7],'source_token_ids':[8]}), self.stage('patch',mutation=mutation)]
+        html=self.render(events)
+        self.assertIn('Measured token-row patch',html)
+        self.assertIn('One physical change affects both roles',html)
+        self.assertIn('&lt;unsafe&gt;',html)
+        self.assertNotIn('<unsafe>',html)
+        self.assertNotIn('No stored patch',html)
+
+    def test_private_unselected_evidence_is_not_rendered(self):
+        html=self.render([self.stage('plan',reasoning='PRIVATE_CHAIN',proposal={'operation':'scale','rationale':'Public rationale'})])
+        self.assertNotIn('PRIVATE_CHAIN',html)
+        self.assertIn('Public rationale',html)
+
+    def test_pinned_turn_does_not_show_latest_stage(self):
+        events=[self.stage('plan',turn=1,proposal={'operation':'scale'}),self.stage('plan',turn=2,proposal={'operation':'noise'}),self.stage('patch','started',turn=2)]
+        view=dashboard._replay({'events':events})
+        html=dashboard._edit_loop(view,{'turn':1,'follow':False})
+        self.assertIn('data-vs-stage="patch" data-vs-stage-status="pending"',html)
+
+    def test_observed_token_catalogue_and_budget_limits(self):
+        inspection={'token_tables':[{'name':'embed.weight','roles':['input','output'],'tied':True}], 'token_candidates':[{'id':7,'piece':'<hello>','text':'hello'}]}
+        html=self.render([{'type':'start','budget_mode':'reserved_api'},self.stage('inspect',turn=0,inspection=inspection)])
+        self.assertIn('Observed token tables and tokenisation',html)
+        self.assertIn('&lt;hello&gt;',html)
+        self.assertIn('configured token rates',html)
+        html=self.render([{'type':'start','budget_mode':'estimated_between_calls'}])
+        self.assertIn('not a hard dollar cap',html)
+
+
+class AgentToolActivityTests(unittest.TestCase):
+    @staticmethod
+    def event(tool="read_skill", status="completed", turn=1, call_id="1", summary="Loaded a bounded row-edit skill", **extra):
+        return {"type": "agent_tool", "tool": tool, "status": status, "turn": turn,
+                "call_id": call_id, "summary": summary, **extra}
+
+    def test_public_receipts_only_and_no_inferred_patch(self):
+        event = self.event(summary="Loaded <bounded> skill", details={"request": "PRIVATE_REQUEST", "result": "PRIVATE_RESULT"}, reasoning="PRIVATE_REASONING")
+        rendered = dashboard.render_dashboard({"events": [event]})
+        self.assertIn("Skills and inspection tools", rendered)
+        self.assertIn("Loaded &lt;bounded&gt; skill", rendered)
+        self.assertIn('data-vs-tool="read_skill" data-vs-tool-status="completed"', rendered)
+        self.assertIn('data-vs-stage="patch" data-vs-stage-status="pending"', rendered)
+        for private in ("PRIVATE_REQUEST", "PRIVATE_RESULT", "PRIVATE_REASONING"):
+            self.assertNotIn(private, rendered)
+
+    def test_failed_tool_is_not_a_successful_plan(self):
+        rendered = dashboard.render_dashboard({"events": [self.event(status="failed", summary="Skill unavailable on this model")]})
+        self.assertIn('data-vs-tool-status="failed"', rendered)
+        self.assertIn("Skill unavailable on this model", rendered)
+        self.assertIn('data-vs-stage="plan" data-vs-stage-status="pending"', rendered)
+
+    def test_pin_preserves_per_turn_history(self):
+        view = dashboard._replay({"events": [self.event(summary="First turn skill"), self.event(turn=2, summary="Second turn skill")]})
+        rendered = dashboard._edit_loop(view, {"turn":1, "follow":False})
+        self.assertIn("First turn skill", rendered)
+        self.assertNotIn("Second turn skill", rendered)
+        followed = dashboard._edit_loop(view, {"turn":1, "follow":True})
+        self.assertIn("Second turn skill", followed)
+        self.assertNotIn("First turn skill", followed)
+
+    def test_same_call_updates_without_duplicates_and_interruption_is_honest(self):
+        events = [self.event(status="started"), self.event(status="completed")]
+        view = dashboard._replay({"events": events})
+        self.assertEqual(len(view["agent_tools"]), 1)
+        self.assertIn('data-vs-tool-status="completed"', dashboard.render_dashboard({"events":events}))
+        rendered = dashboard.render_dashboard({"events": [self.event(status="started")], "status":"cancelled"})
+        self.assertIn("Stopped before completion", rendered)
+        self.assertNotIn('data-vs-tool-status="completed"', rendered)
+
+    def test_activity_is_bounded_and_unknown_status_ignored(self):
+        events = [self.event(call_id=str(i), summary=f"Receipt {i}") for i in range(20)]
+        events += [self.event(status="imagined", summary="NOT_A_RECEIPT")]
+        rendered = dashboard.render_dashboard({"events": events})
+        self.assertEqual(rendered.count('data-vs-tool="read_skill"'), 12)
+        self.assertIn("latest 12 of 20", rendered)
+        self.assertNotIn("NOT_A_RECEIPT", rendered)

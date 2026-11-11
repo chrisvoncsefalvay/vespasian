@@ -168,6 +168,7 @@ struct Dashboard {
     expanded: bool,
     detail_geometry: Cell<(u16, u16)>,
     model_structure: Value,
+    loop_stages: Vec<Value>,
     tensor_activity: Value,
     layer_offset: Option<usize>,
     layer_geometry: Cell<(usize, usize)>,
@@ -219,6 +220,7 @@ impl Default for Dashboard {
             expanded: false,
             detail_geometry: Cell::new((30, 18)),
             model_structure: Value::Null,
+            loop_stages: vec![],
             tensor_activity: Value::Null,
             layer_offset: None,
             layer_geometry: Cell::new((0, 1)),
@@ -422,6 +424,35 @@ impl Dashboard {
                 self.budget_usd = finite_number(event, "budget_usd").unwrap_or(0.0);
                 self.budget_mode = field(event, "budget_mode");
                 self.max_turns = event["max_turns"].as_u64().unwrap_or(0);
+            }
+            "loop_stage" => {
+                self.phase = format!(
+                    "{} · {}",
+                    title(&field(event, "stage")),
+                    field(event, "status")
+                );
+                self.message = field(event, "summary");
+                self.loop_stages.push(event.clone());
+                if self.loop_stages.len() > 256 {
+                    self.loop_stages.remove(0);
+                }
+            }
+            "agent_tool" => {
+                let status = field(event, "status");
+                if matches!(status.as_str(), "started" | "completed" | "failed") {
+                    // Only the public controller receipt belongs in this pane.
+                    // Tool arguments, returned payloads and private reasoning do not.
+                    self.message = field(event, "summary");
+                    self.record_editor_activity(&serde_json::json!({
+                        "call_id":format!("tool-{}-{}", event["turn"], field(event, "call_id")),
+                        "provider":"local tool", "model":field(event, "tool"),
+                        "purpose":"Read-only strategy discovery", "status":status,
+                        "turn":event["turn"], "summary":field(event, "summary")
+                    }));
+                }
+            }
+            "budget_notice" => {
+                self.message = field(event, "message");
             }
             "phase" | "progress" => {
                 if let Some(phase) = event["phase"].as_str() {
@@ -1412,7 +1443,51 @@ fn detail_lines(state: &Dashboard, width: u16) -> Vec<Line<'static>> {
                     width,
                 );
                 detail_section(&mut lines, "DECISION", &change.decision_reason, width);
+                for (key, title) in [
+                    ("strategy", "STRATEGY"),
+                    ("plan", "APPLICATION PLAN"),
+                    ("reflection", "REFLECTION ON MEASURED OUTCOMES"),
+                ] {
+                    if let Some(text) = change.proposal[key].as_str() {
+                        detail_section(&mut lines, title, text, width);
+                    }
+                }
                 detail_section(&mut lines, "EDITOR RATIONALE", &change.rationale, width);
+                for event in state
+                    .loop_stages
+                    .iter()
+                    .filter(|event| event["turn"].as_u64() == Some(change.turn))
+                {
+                    detail_section(
+                        &mut lines,
+                        &format!(
+                            "{} · {}",
+                            field(event, "stage").to_uppercase(),
+                            field(event, "status")
+                        ),
+                        &field(event, "summary"),
+                        width,
+                    );
+                    if event["stage"] == "inspect" && event["status"] == "completed" {
+                        detail_section(
+                            &mut lines,
+                            "OBSERVED TOKEN ROWS",
+                            &value_text(&event["details"]["inspection"]),
+                            width,
+                        );
+                    }
+                }
+                if !change.proposal["token_ids"].is_null() {
+                    detail_section(
+                        &mut lines,
+                        "TOKEN ROW SELECTION",
+                        &format!(
+                            "destinations {} · sources {}",
+                            change.proposal["token_ids"], change.proposal["source_token_ids"]
+                        ),
+                        width,
+                    );
+                }
                 let tensors = change.proposal["targets"]
                     .as_array()
                     .into_iter()
@@ -2426,6 +2501,35 @@ mod tests {
         assert!(text.contains("Reading evaluation results\nComparing metrics"));
         assert!(text.contains("Proposed one tensor scaling"));
         assert!(text.contains("2.3s"));
+    }
+
+    #[test]
+    fn local_tool_receipts_show_only_public_activity() {
+        let mut state = Dashboard::default();
+        state.apply(&json!({"type":"agent_tool","call_id":"one","turn":2,
+            "tool":"read_skill","status":"completed","summary":"Loaded the selected row-edit skill",
+            "details":{"request":"PRIVATE_REQUEST","result":"PRIVATE_RESULT"},"reasoning":"PRIVATE_REASONING"}));
+        assert_eq!(state.editor_calls.len(), 1);
+        assert_eq!(state.editor_calls[0].provider, "local tool");
+        assert_eq!(state.editor_calls[0].status, "completed");
+        state.detail_pane = DetailPane::Editor;
+        let text = detail_lines(&state, 80)
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("Loaded the selected row-edit skill"));
+        assert!(text.contains("Read-only strategy discovery"));
+        for private in ["PRIVATE_REQUEST", "PRIVATE_RESULT", "PRIVATE_REASONING"] {
+            assert!(!text.contains(private));
+        }
+        assert!(state.loop_stages.is_empty());
+        state.apply(&json!({"type":"agent_tool","call_id":"two","turn":2,
+            "tool":"read_skill","status":"failed","summary":"Skill unavailable"}));
+        assert_eq!(state.editor_calls[1].status, "failed");
+        state.apply(&json!({"type":"agent_tool","call_id":"three","turn":2,
+            "tool":"read_skill","status":"imagined","summary":"Not a receipt"}));
+        assert_eq!(state.editor_calls.len(), 2);
     }
 
     #[test]

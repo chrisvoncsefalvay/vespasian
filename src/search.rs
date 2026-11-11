@@ -3,19 +3,25 @@ use serde_json::Value;
 use std::collections::HashSet;
 
 pub fn validate_proposal(p: &Value, editable: &Value) -> Result<()> {
-    let keys: [&str; 7] = [
+    let keys: [&str; 11] = [
         "targets",
         "operation",
         "strength",
         "rank",
         "seed",
         "rationale",
-        "",
+        "strategy",
+        "plan",
+        "reflection",
+        "token_ids",
+        "source_token_ids",
     ];
     let obj = p
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("Editor proposal must be an object"))?;
-    if obj.len() != 6 || obj.keys().any(|k| !keys[..6].contains(&k.as_str())) {
+    if keys[..6].iter().any(|key| !obj.contains_key(*key))
+        || obj.keys().any(|key| !keys.contains(&key.as_str()))
+    {
         bail!("Editor returned an unexpected proposal shape")
     }
     let targets = p["targets"]
@@ -39,10 +45,86 @@ pub fn validate_proposal(p: &Value, editable: &Value) -> Result<()> {
             bail!("Proposal selected an unavailable or duplicate tensor: {name}")
         }
     }
-    if !["scale", "low_rank", "noise", "activation_rank_one"]
-        .contains(&p["operation"].as_str().unwrap_or(""))
+    if ![
+        "scale",
+        "low_rank",
+        "noise",
+        "activation_rank_one",
+        "activation_preserve",
+        "token_row_residual",
+        "token_row_scale",
+        "token_row_interpolate",
+    ]
+    .contains(&p["operation"].as_str().unwrap_or(""))
     {
         bail!("Unknown tensor operation")
+    }
+    let operation = p["operation"].as_str().unwrap_or("");
+    if matches!(operation, "activation_preserve" | "token_row_residual")
+        && p["strength"].as_f64().is_none_or(|s| s <= 0.)
+    {
+        bail!("Measured preservation/residual edits require positive strength");
+    }
+    let row_operation = operation.starts_with("token_row_");
+    for target in targets {
+        let descriptor = editable
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|entry| entry["name"] == *target)
+            .unwrap();
+        if let Some(operations) = descriptor["operations"].as_array() {
+            if !operations.contains(&p["operation"]) {
+                bail!("The selected tensor does not support this operation");
+            }
+        } else if row_operation {
+            bail!("Token-row edits require an explicitly supported token table");
+        }
+    }
+    let ids = |field: &str| -> Result<Vec<u64>> {
+        match p.get(field) {
+            None => Ok(vec![]),
+            Some(Value::Array(values)) if values.len() <= 32 => values
+                .iter()
+                .map(|v| {
+                    v.as_u64()
+                        .ok_or_else(|| anyhow::anyhow!("Token IDs must be nonnegative integers"))
+                })
+                .collect(),
+            _ => bail!("Token selectors must be arrays of at most 32 IDs"),
+        }
+    };
+    let tokens = ids("token_ids")?;
+    let sources = ids("source_token_ids")?;
+    if row_operation {
+        if targets.len() != 1
+            || tokens.is_empty()
+            || tokens.iter().collect::<HashSet<_>>().len() != tokens.len()
+        {
+            bail!("Token-row edits require one table and one to 32 distinct destination IDs");
+        }
+        let descriptor = editable
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|entry| entry["name"] == targets[0])
+            .unwrap();
+        let rows = descriptor["shape"][0].as_u64().unwrap_or(0);
+        if tokens.iter().chain(&sources).any(|id| *id >= rows) {
+            bail!("A token ID is outside the table row range");
+        }
+        if operation == "token_row_interpolate" {
+            if sources.len() != tokens.len()
+                || tokens.iter().zip(&sources).any(|(a, b)| a == b)
+                || p["strength"].as_f64().is_none_or(|v| v <= 0.)
+            {
+                bail!("Row interpolation requires positive strength and a different source ID for every destination");
+            }
+        } else if !sources.is_empty() {
+            bail!("Row scaling does not accept source token IDs");
+        }
+    } else if !tokens.is_empty() || !sources.is_empty() {
+        bail!("MLP edits must have empty token selectors");
     }
     let strength = p["strength"].as_f64().unwrap_or(f64::NAN);
     if !strength.is_finite() || !(1e-6..=0.1).contains(&strength.abs()) {
@@ -57,8 +139,40 @@ pub fn validate_proposal(p: &Value, editable: &Value) -> Result<()> {
     if p["rationale"].as_str().is_none_or(|s| s.trim().is_empty()) {
         bail!("Editor must explain its proposed alteration")
     }
+    for key in ["strategy", "plan", "reflection"] {
+        if let Some(value) = obj.get(key) {
+            if value.as_str().is_none_or(|text| text.trim().is_empty()) {
+                bail!("Editor {key} must be a nonempty summary");
+            }
+        }
+    }
     Ok(())
 }
+/// Token selection must be grounded in this turn's read-only model inspection.
+pub fn validate_inspected_rows(proposal: &Value, inspection: &Value) -> Result<()> {
+    if !proposal["operation"]
+        .as_str()
+        .unwrap_or("")
+        .starts_with("token_row_")
+    {
+        return Ok(());
+    }
+    let allowed: HashSet<u64> = inspection["token_candidates"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| row["id"].as_u64())
+        .collect();
+    for field in ["token_ids", "source_token_ids"] {
+        for id in proposal[field].as_array().into_iter().flatten() {
+            if id.as_u64().is_none_or(|value| !allowed.contains(&value)) {
+                bail!("Token-row edits must use IDs from the current model inspection");
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn metric(v: &Value, split: &str, key: &str) -> Result<f64> {
     let f = v[split][key]
         .as_f64()
@@ -109,9 +223,50 @@ pub fn improves(
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn token_rows_require_supported_grounded_bounded_selectors() {
+        let editable = json!([{"name":"embed.weight","shape":[10,4],"operations":["token_row_scale","token_row_interpolate"]}]);
+        let inspection = json!({"token_candidates":[{"id":1},{"id":2}]});
+        let p = json!({"targets":["embed.weight"],"operation":"token_row_interpolate","strength":0.1,"rank":1,"seed":1,"rationale":"Measured rows","token_ids":[1],"source_token_ids":[2]});
+        validate_proposal(&p, &editable).unwrap();
+        validate_inspected_rows(&p, &inspection).unwrap();
+        for (key, value) in [
+            ("token_ids", json!([1, 1])),
+            ("token_ids", json!([10])),
+            ("source_token_ids", json!([1])),
+            ("strength", json!(-0.1)),
+            ("targets", json!(["embed.weight", "embed.weight"])),
+        ] {
+            let mut invalid = p.clone();
+            invalid[key] = value;
+            assert!(validate_proposal(&invalid, &editable).is_err(), "{invalid}");
+        }
+        let mut ungrounded = p.clone();
+        ungrounded["token_ids"] = json!([3]);
+        assert!(validate_inspected_rows(&ungrounded, &inspection).is_err());
+        let mut generic = p.clone();
+        generic["operation"] = json!("scale");
+        assert!(validate_proposal(&generic, &editable).is_err());
+        assert!(validate_proposal(&p, &json!([{"name":"embed.weight","shape":[10,4]}])).is_err());
+    }
     fn m(score: f64, loss: f64, p: f64) -> Value {
         json!({"validation":{"exact_match":score,"loss":loss},"preserve":{"exact_match":p,"loss":1.0}})
     }
+    #[test]
+    fn proposal_explanations_are_validated_without_breaking_legacy_receipts() {
+        let mut proposal = serde_json::json!({"targets":["layer.weight"],"operation":"scale","strength":0.01,"rank":1,"seed":1,"rationale":"Measured change"});
+        let editable = serde_json::json!([{"name":"layer.weight"}]);
+        validate_proposal(&proposal, &editable).unwrap();
+        for field in ["strategy", "plan", "reflection"] {
+            proposal[field] = serde_json::json!("A concise measured explanation");
+        }
+        validate_proposal(&proposal, &editable).unwrap();
+        proposal["reflection"] = serde_json::json!("");
+        assert!(validate_proposal(&proposal, &editable).is_err());
+        proposal["reflection"] = serde_json::json!({"private":"data"});
+        assert!(validate_proposal(&proposal, &editable).is_err());
+    }
+
     #[test]
     fn only_climbs_and_preserves() {
         let b = m(0.5, 2., 1.);

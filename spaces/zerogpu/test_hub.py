@@ -20,7 +20,7 @@ class HubTests(unittest.TestCase):
         self.revision = "a" * 40
         self.rows = [{"prompt": f"Question {i}", "target": f"Answer {i}"} for i in range(8)]
         self.api = Mock()
-        self.api.dataset_info.return_value = SimpleNamespace(sha=self.revision)
+        self.api.dataset_info.return_value = SimpleNamespace(sha=self.revision, card_data={"task_categories": ["text-generation"]})
         self.client = Mock(return_value=self.api)
         self.datasets = SimpleNamespace(
             __version__="test",
@@ -50,6 +50,9 @@ class HubTests(unittest.TestCase):
             self.assertNotIn("OPENAI_API_KEY", env)
             self.assertNotIn("editor-secret", kwargs["input"])
             self.assertNotIn("visitor", kwargs["input"])
+            payload = json.loads(kwargs["input"])
+            self.assertEqual(payload["config"]["model"], "Qwen/example")
+            self.assertEqual(payload["config"]["hf_task"], "text-generation")
             self.assertEqual(env["HF_TOKEN"], "visitor")
             self.assertEqual(env["HF_HUB_DISABLE_IMPLICIT_TOKEN"], "1")
             self.assertTrue(Path(env["HF_HOME"]).is_dir())
@@ -58,7 +61,7 @@ class HubTests(unittest.TestCase):
             self.cache = env["HF_HOME"]
             return SimpleNamespace(returncode=0, stdout='{"ok":true,"result":{"rows":[]}}')
         with patch.dict(os.environ, {"HF_TOKEN": "owner", "OPENAI_API_KEY": "owner-api"}), patch.object(hub.subprocess, "run", side_effect=run):
-            self.assertEqual(self.real_subprocess("preview", {"api_key": "editor-secret", "hf_token": "visitor"}, "visitor"), {"rows": []})
+            self.assertEqual(self.real_subprocess("preview", {"api_key": "editor-secret", "hf_token": "visitor", "model": "Qwen/example", "hf_task": "text-generation"}, "visitor"), {"rows": []})
         self.assertFalse(Path(self.cache).exists())
 
     def test_no_login_explicitly_disables_ambient_owner_token(self):
@@ -186,6 +189,37 @@ class HubTests(unittest.TestCase):
                          {row["prompt"]: row["split"] for row in reversed_assignments})
         self.assertEqual(json.dumps(rows), before)
         self.assertEqual(sum(row["split"] == "validation" for row in assigned), 1)
+
+    def test_task_preview_discloses_adapter_without_echoing_untrusted_html(self):
+        rendered=hub.preview_html({"rows":[],"task_metadata":{"selected_task":"text-generation","model_pipeline_tag":"<script>bad</script>","selection_source":"dataset_metadata"}})
+        self.assertIn("suggested by dataset metadata",rendered)
+        self.assertIn("Editing uses text generation",rendered)
+        self.assertNotIn("<script>",rendered)
+        self.assertIn("&lt;script&gt;",rendered)
+
+    def test_task_filter_is_optional_and_canonical(self):
+        self.api.list_datasets.return_value=[]
+        hub.search_dataset_results("reviews",token=False,api=self.api,hf_task="text-classification")
+        self.api.list_datasets.assert_called_once_with(search="reviews",limit=12,sort="downloads",task_categories="text-classification")
+        with self.assertRaisesRegex(ValueError,"Unsupported editing task"):
+            hub.search_dataset_results("images",api=self.api,hf_task="image-classification")
+
+    def test_model_multimodal_tag_suggests_text_without_claiming_loader_support(self):
+        self.api.model_info.return_value=SimpleNamespace(pipeline_tag="image-text-to-text")
+        result=hub.model_task_metadata("Qwen/example",api=self.api)
+        self.assertEqual(result["model_suggested_tasks"],["text-generation"])
+        self.assertNotIn("supported",result)
+
+    def test_upload_preview_requires_explicit_task_and_preparation_enforces_it(self):
+        path=self.root/"upload.jsonl"
+        path.write_text("\n".join(json.dumps(row) for row in self.rows))
+        config={"dataset_location":"upload","dataset_file":str(path)}
+        result=hub.preview_upload(str(path),config)
+        self.assertTrue(result["task_metadata"]["requires_choice"])
+        with self.assertRaisesRegex(ValueError,"Choose a task explicitly"):
+            hub.prepare_data(config,self.root)
+        result=hub.preview_upload(str(path),{**config,"hf_task":"text-generation"})
+        self.assertFalse(result["task_metadata"]["requires_choice"])
 
     def test_public_search_uses_visitor_token_and_omits_private_results(self):
         self.api.list_datasets.return_value = [

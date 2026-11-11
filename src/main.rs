@@ -1,3 +1,4 @@
+mod agent_tools;
 mod budget;
 mod controls;
 mod data;
@@ -8,6 +9,7 @@ mod preview;
 mod publish;
 mod scoring;
 mod search;
+mod strategies;
 mod trajectory;
 mod ui;
 mod wizard;
@@ -33,7 +35,7 @@ use std::{
     version,
     about = "The Weight Space Editing Assistant",
     long_about = "Vespasian edits small-model weights through a measured hill climb, guided by a frontier model.",
-    after_help = "EXAMPLE\n  vespasian dataset.jsonl --model Qwen3-0.8B --goal 'Answer concisely' --budget 2 --editor codex"
+    after_help = "EXAMPLE\n  vespasian dataset.jsonl --task text-generation --model Qwen3-0.8B --goal 'Answer concisely' --budget 2 --editor codex"
 )]
 struct Cli {
     /// Local JSONL data or a Hugging Face dataset
@@ -62,6 +64,9 @@ struct Cli {
     /// Maximum extracted examples to import from Hugging Face
     #[arg(long,default_value_t=100,value_parser=clap::value_parser!(u32).range(5..=100000))]
     limit: u32,
+    /// Canonical Hugging Face text task; required when dataset tags cannot resolve it
+    #[arg(long = "task")]
+    hf_task: Option<String>,
     /// Task category recorded with this run
     #[arg(long, default_value = "custom")]
     target_type: String,
@@ -70,6 +75,9 @@ struct Cli {
     /// Model alias, Hugging Face ID, or local checkpoint directory
     #[arg(long, default_value = "Qwen3-0.8B")]
     model: String,
+    /// Prompt formatting; plain must be explicit when a tokenizer has no chat template
+    #[arg(long, default_value = "auto", value_parser = ["auto", "chat", "plain"], global = true)]
+    prompt_format: String,
     /// Behaviour to develop, in your own words
     #[arg(long)]
     goal: Option<String>,
@@ -116,17 +124,23 @@ struct Cli {
     #[arg(long,default_value="auto",value_parser=["auto","exact_match","token_f1","semantic"])]
     metric: String,
     /// Frontier inference budget in USD
-    #[arg(long, default_value_t = 2.0)]
+    #[arg(long, default_value_t = 10.0)]
     budget: f64,
+    /// Strict requires API cost reservation; auto labels CLI spending as estimated
+    #[arg(long, default_value = "auto", value_parser = ["auto", "strict"])]
+    budget_policy: String,
     /// Frontier provider. CLI providers use your existing login
     #[arg(long,default_value="codex",value_parser=["codex","claude","openai","anthropic"])]
     editor: String,
     /// Frontier model (defaults to GPT-6.1 Sol or Claude Sonnet 5.5)
     #[arg(long)]
     editor_model: Option<String>,
-    /// Maximum number of proposed weight changes
-    #[arg(long,default_value_t=8,value_parser=clap::value_parser!(u32).range(1..=1000))]
-    max_turns: u32,
+    /// Optional maximum number of proposed weight changes; otherwise spending governs
+    #[arg(long,value_parser=clap::value_parser!(u32).range(1..))]
+    max_turns: Option<u32>,
+    /// Frontier reasoning effort (requires provider/model support)
+    #[arg(long, default_value = "low", value_parser = ["low", "medium", "high"])]
+    reasoning_effort: String,
     /// Maximum API output tokens per request
     #[arg(long,default_value_t=2048,value_parser=clap::value_parser!(u32).range(512..=32768))]
     max_output_tokens: u32,
@@ -139,6 +153,18 @@ struct Cli {
     /// Use a specific model revision
     #[arg(long)]
     revision: Option<String>,
+    /// Final output: materialised model or replayable patch bundle; intermediate saves are patches
+    #[arg(long, default_value = "model", value_parser = ["model", "patch"])]
+    save_format: String,
+    /// Explicitly authorize automatic patch backup to the named private repository
+    #[arg(long)]
+    patch_backup: bool,
+    /// Private Hugging Face model repository for authorized patch backups
+    #[arg(long, requires = "patch_backup")]
+    patch_repo: Option<String>,
+    /// Authorize creating the named repository as private if it is missing
+    #[arg(long, requires = "patch_backup")]
+    patch_create: bool,
     /// New directory for checkpoint, rollouts and receipts
     #[arg(long)]
     output: Option<PathBuf>,
@@ -213,6 +239,18 @@ enum Commands {
         #[arg(long)]
         create: bool,
     },
+    /// Materialise a verified patch bundle onto its matching base model
+    MaterializePatch {
+        patch: PathBuf,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        revision: Option<String>,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, default_value = "cpu", value_parser = ["cpu", "cuda", "auto"])]
+        device: String,
+    },
     /// Replay a run's measured hill climb in the terminal
     Replay { run: PathBuf },
 }
@@ -243,6 +281,18 @@ impl Events {
         }
         Ok(())
     }
+    pub fn stage(
+        &self,
+        stage: &str,
+        status: &str,
+        turn: u64,
+        summary: &str,
+        details: Value,
+    ) -> Result<()> {
+        let event = json!({"type":"loop_stage","stage":stage,"status":status,"turn":turn,"summary":summary,"details":details});
+        self.record("event", &event)?;
+        self.emit(event)
+    }
     pub fn emit(&self, v: Value) -> Result<()> {
         writeln!(self.file.lock().unwrap(), "{}", v)?;
         if let Some(tx) = &self.tx {
@@ -251,7 +301,38 @@ impl Events {
             println!("{}", v)
         } else if !self.quiet {
             match v["type"].as_str().unwrap_or("") {
+                "agent_tool" => eprintln!(
+                    "  Tool {} · {} · {}",
+                    v["tool"].as_str().unwrap_or(""),
+                    v["status"].as_str().unwrap_or(""),
+                    v["summary"].as_str().unwrap_or("")
+                ),
                 "phase" => eprintln!("  {}", v["message"].as_str().unwrap_or("")),
+                "loop_stage" => eprintln!(
+                    "  {} · {} · {}",
+                    v["stage"].as_str().unwrap_or(""),
+                    v["status"].as_str().unwrap_or(""),
+                    v["summary"].as_str().unwrap_or("")
+                ),
+                "proposal" => {
+                    for key in ["strategy", "plan", "rationale", "reflection"] {
+                        if let Some(text) = v["proposal"][key].as_str() {
+                            eprintln!("    {key}: {text}");
+                        }
+                    }
+                    if v["proposal"]["operation"]
+                        .as_str()
+                        .is_some_and(|op| op.starts_with("token_row_"))
+                    {
+                        eprintln!(
+                            "    Token rows: {} ← {} on {}",
+                            v["proposal"]["token_ids"],
+                            v["proposal"]["source_token_ids"],
+                            v["proposal"]["targets"]
+                        );
+                    }
+                }
+                "budget_notice" => eprintln!("  {}", v["message"].as_str().unwrap_or("")),
                 "turn" => {
                     let metric = v["metric"].as_str().unwrap_or("exact_match");
                     let measurement = v["metrics"]["validation"][metric]
@@ -420,6 +501,22 @@ async fn entry() -> Result<()> {
     if let Some(command) = &cli.command {
         return utility(command, &cli).await;
     }
+    if cli.save_format == "patch" && cli.publish_repo.is_some() {
+        bail!("Model publication requires --save-format model; patch-only runs can use an authorized private patch backup")
+    }
+    if cli.patch_backup
+        && (cli
+            .patch_repo
+            .as_deref()
+            .is_none_or(|s| s.trim().is_empty())
+            || cli.hf_token.as_deref().is_none_or(|s| s.trim().is_empty()))
+    {
+        bail!("Private patch backup needs --patch-repo and an explicit session HF token; no implicit account credential is used")
+    }
+    let accounting = budget_mode(&cli.editor, &cli.budget_policy)?;
+    if accounting == "estimated_between_calls" && !cli.json {
+        eprintln!("  Spending notice: {} login uses estimated spending checked between calls. A call can exceed the remaining estimate. Use --budget-policy strict with --editor openai or anthropic for pre-call reservation at configured rates.", cli.editor);
+    }
     let dataset = cli
         .dataset
         .as_ref()
@@ -452,11 +549,7 @@ async fn entry() -> Result<()> {
         }
         .into()
     });
-    let mode = if ["codex", "claude"].contains(&cli.editor.as_str()) {
-        "estimated_between_calls"
-    } else {
-        "reserved_api"
-    };
+    let mode = budget_mode(&cli.editor, &cli.budget_policy)?;
     let mut budget = budget::Budget::new(
         cli.budget,
         &editor_model,
@@ -464,17 +557,31 @@ async fn entry() -> Result<()> {
         cli.output_price,
         mode,
     )?;
-    let check=tokio::process::Command::new(python_path(&cli.python)).args(["-c","import torch, transformers; from transformers import Qwen3_5ForConditionalGeneration, Gemma3ForCausalLM"]).output().await.context("Model runtime unavailable. Run vespasian setup or set --python")?;
+    let check = tokio::process::Command::new(python_path(&cli.python))
+        .args([
+            "-c",
+            "import torch, transformers; from transformers import AutoModelForCausalLM",
+        ])
+        .output()
+        .await
+        .context("Model runtime unavailable. Run vespasian setup or set --python")?;
     if !check.status.success() {
-        bail!("Model runtime needs PyTorch and Transformers with Qwen3.5 support. Run vespasian setup or set --python")
+        bail!("Model runtime needs PyTorch and Transformers with the selected model architecture. Run vespasian setup or set --python")
     }
     let output = new_output(&cli.output)?;
-    let data = match local_data {
-        Some(d) => d,
+    let (data, task_metadata) = match local_data {
+        Some(d) => {
+            let metadata = validate_local_task(&cli, &d.mode).await?;
+            (d, metadata)
+        }
         None => {
             eprintln!("  Importing {} · {}", dataset.display(), cli.dataset_split);
             let script = output.join("dataset-loader.py");
             fs::write(&script, include_str!("../python/dataset.py"))?;
+            fs::write(
+                output.join("task_metadata.py"),
+                include_str!("../python/task_metadata.py"),
+            )?;
             let imported = output.join("source.jsonl");
             let mut command = tokio::process::Command::new(python_path(&cli.python));
             command
@@ -485,6 +592,8 @@ async fn entry() -> Result<()> {
                 .arg(&cli.dataset_split)
                 .arg("--dataset-mode")
                 .arg(&cli.dataset_mode)
+                .arg("--model-id")
+                .arg(&model)
                 .arg("--limit")
                 .arg(cli.limit.to_string())
                 .arg("--output")
@@ -497,6 +606,7 @@ async fn entry() -> Result<()> {
                 ("--prompt-field", &cli.prompt_field),
                 ("--target-field", &cli.target_field),
                 ("--text-field", &cli.text_field),
+                ("--task", &cli.hf_task),
             ] {
                 if let Some(value) = value {
                     command.arg(flag).arg(value);
@@ -528,9 +638,10 @@ async fn entry() -> Result<()> {
             if !cli.json {
                 eprintln!("  Imported {} examples", receipt["rows"]);
             }
-            data::load(&imported)?
+            (data::load(&imported)?, receipt["task_metadata"].clone())
         }
     };
+    cli.hf_task = task_metadata["selected_task"].as_str().map(str::to_owned);
     cli.metric = metric_for_mode(&cli.metric, &data.mode)?;
     data::write(&output.join("dataset.jsonl"), &data.rows)?;
     fs::write(
@@ -540,6 +651,10 @@ async fn entry() -> Result<()> {
     fs::write(
         output.join("health.py"),
         include_str!("../python/health.py"),
+    )?;
+    fs::write(
+        output.join("patches.py"),
+        include_str!("../python/patches.py"),
     )?;
     let health_manifest = if cli.health_checks.is_empty() {
         Value::Null
@@ -558,7 +673,7 @@ async fn entry() -> Result<()> {
     };
     write_json(
         &output.join("run.json"),
-        &json!({"version":env!("CARGO_PKG_VERSION"),"started_unix":now(),"dataset_source":if remote{dataset.clone()}else{fs::canonicalize(dataset)?},"dataset_selection":if remote{json!({"config":cli.dataset_config,"split":cli.dataset_split,"revision":cli.dataset_revision,"prompt_field":cli.prompt_field,"target_field":cli.target_field,"dataset_mode":cli.dataset_mode,"text_field":cli.text_field,"limit":cli.limit})}else{Value::Null},"dataset_sha256":data.sha256,"counts":data.counts,"target_type":cli.target_type,"dataset_mode":data.mode,"text_field":cli.text_field,"model_requested":cli.model,"model":model,"revision":cli.revision,"goal":goal,"controls":cli.controls,"health_checks":cli.health_checks,"health_max_drop":cli.health_max_drop,"trajectory":{"saved":cli.save_trajectory,"repo":cli.trajectory_repo,"visibility":cli.trajectory_visibility,"create":cli.trajectory_create},"publish": {"repo":cli.publish_repo,"visibility":cli.publish_visibility,"create":cli.publish_create},"metric":cli.metric,"editor":cli.editor,"editor_model":editor_model,"budget":budget,"max_turns":cli.max_turns,"seed":cli.seed,"max_new_tokens":cli.max_new_tokens,"max_seq_length":cli.max_seq_length,"preserve_tolerance":cli.preserve_tolerance}),
+        &json!({"version":env!("CARGO_PKG_VERSION"),"started_unix":now(),"dataset_source":if remote{dataset.clone()}else{fs::canonicalize(dataset)?},"dataset_selection":if remote{json!({"config":cli.dataset_config,"split":cli.dataset_split,"revision":cli.dataset_revision,"prompt_field":cli.prompt_field,"target_field":cli.target_field,"dataset_mode":cli.dataset_mode,"text_field":cli.text_field,"limit":cli.limit})}else{Value::Null},"dataset_sha256":data.sha256,"counts":data.counts,"target_type":cli.target_type,"hf_task":cli.hf_task,"task_metadata":task_metadata,"prompt_format":cli.prompt_format,"save_format":cli.save_format,"patch_backup":{"enabled":cli.patch_backup,"repo":cli.patch_repo,"create":cli.patch_create},"dataset_mode":data.mode,"text_field":cli.text_field,"model_requested":cli.model,"model":model,"revision":cli.revision,"goal":goal,"controls":cli.controls,"health_checks":cli.health_checks,"health_max_drop":cli.health_max_drop,"trajectory":{"saved":cli.save_trajectory,"repo":cli.trajectory_repo,"visibility":cli.trajectory_visibility,"create":cli.trajectory_create},"publish": {"repo":cli.publish_repo,"visibility":cli.publish_visibility,"create":cli.publish_create},"metric":cli.metric,"editor":cli.editor,"editor_model":editor_model,"budget":budget,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"seed":cli.seed,"max_new_tokens":cli.max_new_tokens,"max_seq_length":cli.max_seq_length,"preserve_tolerance":cli.preserve_tolerance}),
     )?;
     let live = !cli.no_tui
         && !cli.json
@@ -604,7 +719,7 @@ async fn entry() -> Result<()> {
         }
         Some(Mutex::new(trajectory::Recorder::new(
             &output.join("trajectory.jsonl"),
-            &json!({"version":env!("CARGO_PKG_VERSION"),"model":model,"model_revision":cli.revision,"dataset_sha256":data.sha256,"dataset_mode":data.mode,"goal":goal,"controls":cli.controls,"editor":cli.editor,"editor_model":editor_model,"seed":cli.seed,"health_checks":cli.health_checks,"health_max_drop":cli.health_max_drop,"health_manifest":health_manifest,"budget_usd":cli.budget}),
+            &json!({"version":env!("CARGO_PKG_VERSION"),"model":model,"model_revision":cli.revision,"dataset_sha256":data.sha256,"dataset_mode":data.mode,"goal":goal,"controls":cli.controls,"editor":cli.editor,"editor_model":editor_model,"seed":cli.seed,"health_checks":cli.health_checks,"health_max_drop":cli.health_max_drop,"health_manifest":health_manifest,"budget_usd":cli.budget,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"max_turns":cli.max_turns}),
             secrets,
         )?))
     } else {
@@ -617,7 +732,8 @@ async fn entry() -> Result<()> {
         json: cli.json,
         quiet: false,
     };
-    events.emit(json!({"type":"start","model":model,"editor":format!("{} / {}",cli.editor,editor_model),"goal":goal,"budget_usd":cli.budget,"max_turns":cli.max_turns,"output":output,"budget_mode":mode}))?;
+    events.emit(json!({"type":"start","model":model,"editor":format!("{} / {}",cli.editor,editor_model),"goal":goal,"budget_usd":cli.budget,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"output":output,"budget_mode":mode}))?;
+    events.emit(json!({"type":"budget_notice","mode":mode,"policy":cli.budget_policy,"message":if mode == "reserved_api" {"API requests reserve estimated cost before each call using the configured token rates. GPU charges and provider billing changes are separate."} else {"Logged-in CLI spending is estimated between calls. A single call may exceed the remaining estimate; this is not a hard spending ceiling."}}))?;
     let cancellation = async {
         loop {
             if cancel.load(Ordering::Relaxed) {
@@ -754,8 +870,14 @@ async fn entry() -> Result<()> {
             }
         );
         println!(
-            "Checkpoint: {}\nReport: {}",
-            output.join("checkpoint").display(),
+            "Output: {}\nReport: {}",
+            output
+                .join(if cli.save_format == "model" {
+                    "checkpoint"
+                } else {
+                    "patches.zip"
+                })
+                .display(),
             output.join("report.json").display()
         );
     }
@@ -774,6 +896,9 @@ impl From<(&Cli, &clap::ArgMatches)> for wizard::WizardOptions {
         Self {
             python: python_path(&cli.python),
             model: cli.model.clone(),
+            hf_task: cli.hf_task.clone(),
+            prompt_format: cli.prompt_format.clone(),
+            save_format: cli.save_format.clone(),
             editor: cli.editor.clone(),
             metric: cli.metric.clone(),
             target_type: (matches.value_source("target_type")
@@ -790,6 +915,9 @@ impl From<(&Cli, &clap::ArgMatches)> for wizard::WizardOptions {
             goal: cli.goal.clone(),
             editor_model: cli.editor_model.clone(),
             budget: cli.budget,
+            budget_policy: cli.budget_policy.clone(),
+            max_turns: cli.max_turns,
+            reasoning_effort: cli.reasoning_effort.clone(),
             controls: cli.controls.clone(),
             hf_token: cli.hf_token.clone(),
             publish_repo: cli.publish_repo.clone(),
@@ -807,6 +935,9 @@ impl From<(&Cli, &clap::ArgMatches)> for wizard::WizardOptions {
 
 fn apply_guided(cli: &mut Cli, selection: wizard::WizardResult) {
     cli.dataset_mode = selection.dataset_mode;
+    cli.hf_task = selection.hf_task;
+    cli.prompt_format = selection.prompt_format;
+    cli.save_format = selection.save_format;
     cli.text_field = if selection.text_field.is_empty() {
         None
     } else {
@@ -818,6 +949,9 @@ fn apply_guided(cli: &mut Cli, selection: wizard::WizardResult) {
     cli.goal = Some(selection.goal);
     cli.metric = selection.metric;
     cli.budget = selection.budget;
+    cli.budget_policy = selection.budget_policy;
+    cli.max_turns = selection.max_turns;
+    cli.reasoning_effort = selection.reasoning_effort;
     cli.editor = selection.editor;
     cli.editor_model = selection.editor_model;
     cli.dataset_split = selection.dataset_split;
@@ -847,6 +981,39 @@ fn apply_guided(cli: &mut Cli, selection: wizard::WizardResult) {
     };
 }
 
+fn budget_mode(editor: &str, policy: &str) -> Result<&'static str> {
+    if !["auto", "strict"].contains(&policy) {
+        bail!("Choose budget policy auto or strict");
+    }
+    if ["codex", "claude"].contains(&editor) {
+        if policy == "strict" {
+            bail!("Strict budget policy requires --editor openai or anthropic. Logged-in CLI editors cannot guarantee a per-call spending ceiling; choose auto only if between-call estimates are acceptable.");
+        }
+        Ok("estimated_between_calls")
+    } else {
+        Ok("reserved_api")
+    }
+}
+
+fn inspection_texts(goal: &Option<String>, best: &Value) -> Vec<String> {
+    let mut texts = vec![goal.as_deref().unwrap_or("").chars().take(256).collect()];
+    for row in best["samples"].as_array().into_iter().flatten() {
+        if !["edit", "validation", "preserve"].contains(&row["split"].as_str().unwrap_or("")) {
+            continue;
+        }
+        if let Some(text) = row["prediction"].as_str() {
+            if !text.is_empty() && texts.len() < 16 {
+                texts.push(text.chars().take(256).collect());
+            }
+        }
+    }
+    texts
+}
+
+fn turn_limit_reached(limit: Option<u32>, next_turn: u64) -> bool {
+    limit.is_some_and(|limit| next_turn > u64::from(limit))
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn frontier(
     cli: &Cli,
@@ -863,7 +1030,7 @@ async fn frontier(
     write_json(&output.join("budget.json"), b)?;
     let dir = output.join("editor").join(tag);
     fs::create_dir_all(&dir)?;
-    events.record("editor_request", &json!({"id":tag,"provider":cli.editor,"model":model,"system":editor::instructions(),"context":context,"schema":schema,"reservation_usd":reserve,"budget":b}))?;
+    events.record("editor_request", &json!({"id":tag,"provider":cli.editor,"model":model,"system":editor::instructions(),"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"context":context,"schema":schema,"reservation_usd":reserve,"budget":b}))?;
     let spent_before = b.spent_usd;
     let call_started = std::time::Instant::now();
     let purpose = if tag == "assessment" {
@@ -902,6 +1069,7 @@ async fn frontier(
         b.limit_usd - b.spent_usd,
         b.mode == "reserved_api",
         Some(&activity),
+        &cli.reasoning_effort,
     )
     .await
     {
@@ -932,6 +1100,94 @@ async fn frontier(
     Ok(r.value)
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn plan_with_tools(
+    cli: &Cli,
+    model: &str,
+    base: &Value,
+    info: &Value,
+    inspection: &mut Value,
+    history: &[Value],
+    best: &Value,
+    dataset_mode: &str,
+    worker: &mut worker::Worker,
+    output: &Path,
+    turn: u64,
+    events: &Events,
+    budget: &mut budget::Budget,
+) -> Result<Option<Value>> {
+    let mut session = agent_tools::Session::new(
+        strategies::catalogue(dataset_mode, &info["allowed_operations"], inspection),
+        inspection.clone(),
+        info["editable"].clone(),
+        history,
+        best,
+    );
+    let mut call = 0u64;
+    loop {
+        call += 1;
+        let mut context = session.context(base);
+        context["remaining_usd"] = json!(budget.remaining());
+        let call_id = format!("turn-{turn:03}-tool-{call:03}");
+        let action = frontier(
+            cli,
+            model,
+            &context,
+            &editor::agent_action_schema(),
+            output,
+            &call_id,
+            events,
+            budget,
+        )
+        .await?;
+        agent_tools::validate_action(&action)?;
+        let tool = action["action"].as_str().unwrap_or("");
+        if tool == "stop" {
+            let event = json!({"type":"agent_tool","turn":turn,"call_id":call_id,"tool":"stop","status":"completed","summary":action["summary"],"details":{"weights_changed":false}});
+            events.record("event", &event)?;
+            events.emit(event)?;
+            return Ok(None);
+        }
+        if tool == "propose" {
+            if let Err(error) = session.validate(&action["proposal"]) {
+                session.last_result =
+                    json!({"tool":"propose","error":format!("{error:#}"),"weights_changed":false});
+            } else {
+                *inspection = session.inspection;
+                return Ok(Some(action["proposal"].clone()));
+            }
+        } else {
+            let query = action["query"].as_str().unwrap_or("");
+            if tool == "inspect_tokens" && !query.is_empty() && query != session.token_query {
+                if query.chars().count() > 256 {
+                    bail!("Token inspection text exceeds 256 characters");
+                }
+                let updated = worker
+                    .request(json!({"command":"inspect","token_texts":[query]}), events)
+                    .await?;
+                let catalogue =
+                    strategies::catalogue(dataset_mode, &info["allowed_operations"], &updated);
+                session.refresh(updated, catalogue, query.into());
+            }
+            session.last_result = match session.execute(&action) {
+                Ok(result) => result,
+                Err(error) => {
+                    json!({"tool":tool,"error":format!("{error:#}"),"weights_changed":false})
+                }
+            };
+        }
+        let failed = session.last_result.get("error").is_some();
+        let summary = if failed {
+            format!("{tool}: request rejected; no weights changed")
+        } else {
+            format!("{tool}: read-only result available")
+        };
+        let event = json!({"type":"agent_tool","turn":turn,"call_id":call_id,"tool":tool,"status":if failed{"failed"}else{"completed"},"summary":summary,"details":{"skill_id":action["skill_id"],"count":session.last_result["count"],"total":session.last_result["total"],"offset":session.last_result["offset"],"available":session.last_result["available"]}});
+        events.record("event", &event)?;
+        events.emit(event)?;
+    }
+}
+
 async fn run(
     cli: &Cli,
     data: &data::Dataset,
@@ -944,19 +1200,20 @@ async fn run(
     events.emit(
         json!({"type":"phase","phase":"assessing","message":"Assessing the goal and dataset"}),
     )?;
-    let examples: Vec<_> = data
-        .rows
-        .iter()
-        .filter(|r| r.split == "edit")
-        .take(16)
-        .collect();
+    events.stage(
+        "assess",
+        "started",
+        0,
+        "Assessing whether the goal and visible data define a measurable experiment",
+        json!({}),
+    )?;
     let assessment_examples: Vec<_> = data
         .rows
         .iter()
         .filter(|r| r.split != "test")
         .take(24)
         .collect();
-    let mut assessment=frontier(cli,editor_model,&json!({"task":"Assess whether these text examples provide a useful measurable direction for the user's goal. Mark suitable if an honest small experiment can be run. Perfection or proven improvement is not required. Choose exact_match for strict answer/format tasks, token_f1 for reference-overlap tasks, semantic for style or other rubric-based judgement. Preservation examples are shown when supplied. Test examples remain sealed and must never be requested. No gradients are allowed. This is direct tensor surgery and measured hill climbing. For corpus mode, target texts are style examples, not answers to reproduce, and the model generates unconditionally. For prompts mode, there are no reference answers and the goal supplies the scoring rubric. Both modes require semantic scoring. Explain any limitation in the plan, rejecting only incompatible or unusable data. Honour requested_metric if it is not auto.","goal":cli.goal,"controls":cli.controls,"dataset_mode":data.mode,"requested_metric":cli.metric,"counts":data.counts,"examples":assessment_examples}),&editor::assessment_schema(),output,"assessment",events,b).await?;
+    let mut assessment=frontier(cli,editor_model,&json!({"task":"Assess whether these text examples provide a useful measurable direction for the user's goal. Mark suitable if an honest small experiment can be run. Perfection or proven improvement is not required. Choose exact_match for strict answer/format tasks, token_f1 for reference-overlap tasks, semantic for style or other rubric-based judgement. Preservation examples are shown when supplied. Test examples remain sealed and must never be requested. No autograd or backpropagation is used. This is direct tensor surgery and measured hill climbing. For corpus mode, target texts are style examples, not answers to reproduce, and the model generates unconditionally. For prompts mode, there are no reference answers and the goal supplies the scoring rubric. Both modes require semantic scoring. Explain any limitation in the plan, rejecting only incompatible or unusable data. Honour requested_metric if it is not auto.","goal":cli.goal,"controls":cli.controls,"dataset_mode":data.mode,"hf_task":cli.hf_task,"requested_metric":cli.metric,"counts":data.counts,"examples":assessment_examples}),&editor::assessment_schema(),output,"assessment",events,b).await?;
     if cli.metric != "auto" {
         assessment["metric"] = json!(cli.metric);
     }
@@ -968,6 +1225,19 @@ async fn run(
         bail!("Editor selected an unsupported metric")
     }
     events.emit(json!({"type":"assessment","suitable":assessment["suitable"],"reason":assessment["reason"],"plan":assessment["plan"],"metric":key}))?;
+    events.stage(
+        "assess",
+        if assessment["suitable"] == true {
+            "completed"
+        } else {
+            "failed"
+        },
+        0,
+        assessment["reason"]
+            .as_str()
+            .unwrap_or("Dataset assessment returned"),
+        json!({"assessment":assessment}),
+    )?;
     if assessment["suitable"] != true {
         bail!(
             "Dataset needs revision: {}",
@@ -976,6 +1246,13 @@ async fn run(
                 .unwrap_or("The supplied examples do not support the goal")
         )
     }
+    events.stage(
+        "inspect",
+        "started",
+        0,
+        "Loading the target model and reading its editable structure",
+        json!({"model":model}),
+    )?;
     events.emit(json!({"type":"phase","phase":"loading","message":format!("Loading {model}")}))?;
     let mut w = worker::Worker::spawn(
         &python_path(&cli.python),
@@ -983,17 +1260,33 @@ async fn run(
         &output.join("worker.log"),
         cli.hf_token.as_deref(),
     )?;
-    let init = json!({"command":"init","model":model,"revision":cli.revision,"dataset":output.join("dataset.jsonl"),"device":cli.device,"seed":cli.seed,"max_seq_length":cli.max_seq_length,"health_path":if cli.health_checks.is_empty(){Value::Null}else{json!(output.join("health.json"))}});
+    let init = json!({"command":"init","model":model,"revision":cli.revision,"dataset":output.join("dataset.jsonl"),"device":cli.device,"seed":cli.seed,"max_seq_length":cli.max_seq_length,"prompt_format":cli.prompt_format,"health_path":if cli.health_checks.is_empty(){Value::Null}else{json!(output.join("health.json"))}});
     let info = w.request(init.clone(), events).await?;
     write_json(&output.join("model.json"), &info)?;
+    let journal = output.join("patches");
+    let patch_info = w.request(json!({"command":"patch_init","directory":journal,"base_model":if Path::new(model).is_dir(){Value::Null}else{json!(model)}}), events).await?;
+    write_json(&output.join("patches.json"), &patch_info)?;
+    w.request(
+        json!({"command":"patch_export","directory":journal,"path":output.join("patches.zip")}),
+        events,
+    )
+    .await?;
     events.emit(json!({"type":"model_structure","model":info["model"],"architecture":info["architecture"],"num_layers":info["num_hidden_layers"],"editable":info["editable"]}))?;
     events.record("event", &json!({"name":"model_loaded","dataset_mode":data.mode,"generation":info["generation"],"model":info["model"],"revision":info["revision"],"architecture":info["architecture"],"num_hidden_layers":info["num_hidden_layers"],"editable":info["editable"],"runtime":info["runtime"],"device":info["device"],"dtype":info["dtype"],"source_files":info["source"]["files"],"health_checks":cli.health_checks}))?;
+    events.stage("inspect", "completed", 0, "Read the model architecture and supported editable tensors", json!({"model":info["model"],"architecture":info["architecture"],"editable":info["editable"],"token_tables":info["token_tables"]}))?;
     let splits: Vec<&str> = ["edit", "validation", "preserve"]
         .into_iter()
         .filter(|s| data.counts.contains_key(*s))
         .collect();
     events.emit(
         json!({"type":"phase","phase":"baseline","message":"Measuring the original checkpoint"}),
+    )?;
+    events.stage(
+        "test",
+        "started",
+        0,
+        "Measuring unmodified model answers and preservation checks",
+        json!({}),
     )?;
     let mut baseline=w.request(json!({"command":"evaluate","splits":splits,"max_new_tokens":cli.max_new_tokens,"label":"baseline","turn":0,"receipt":{"file":"baseline.json","pointer":"/samples"}}),events).await?;
     if !cli.health_checks.is_empty() {
@@ -1027,53 +1320,120 @@ async fn run(
     write_json(&output.join("baseline.json"), &baseline)?;
     events.record("baseline", &baseline)?;
     events.emit(json!({"type":"baseline","metrics":baseline["metrics"],"health":baseline["health"]["metrics"]}))?;
+    events.stage(
+        "test",
+        "completed",
+        0,
+        "Baseline answers and scores measured before editing",
+        json!({"metrics":baseline["metrics"],"health":baseline["health"]["metrics"],"source_turn":0}),
+    )?;
     let mut best = baseline.clone();
     let mut history: Vec<Value> = vec![];
     let mut accepted = 0;
     let mut best_turn = 0;
     let mut stop_reason = "turn_limit".to_string();
-    for turn in 1..=cli.max_turns {
-        let parent_turn = best_turn;
-        let recent: Vec<_> = history.iter().rev().take(8).collect();
-        let reflected: Vec<_> = ["edit", "validation", "preserve"]
-            .into_iter()
-            .flat_map(|split| {
-                best["samples"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter(move |r| r["split"] == split)
-                    .take(8)
-            })
-            .collect();
-        let context = json!({"task":"Propose one direct tensor alteration to improve the goal. Reflect on actual generated failures and the previous mutations. No training or gradients. Candidate changes start from retained best weights. Selection maximises the validation metric. Ties prefer lower reference loss when measured. Prompt-only ties do not improve the objective. Avoid repeating identical mutations. Use only allowed_operations. When reference tokens are available, prefer activation_rank_one for targeted corrections: forward-only activation keys and target-minus-predicted output embedding directions. Scale is W*(1+strength). Low_rank/noise use seeded directions with Frobenius norm abs(strength)*norm(W). Use small strengths initially and exploit measured useful directions. Preserve checks must pass.","goal":cli.goal,"controls":cli.controls,"dataset_mode":data.mode,"allowed_operations":info["allowed_operations"],"assessment":assessment,"turn":turn,"max_turns":cli.max_turns,"remaining_usd":b.remaining(),"editable":info["editable"],"examples":examples,"best_metrics":best["metrics"],"baseline_metrics":baseline["metrics"],"health":best["health"]["metrics"],"baseline_health":baseline["health"]["metrics"],"health_max_drop":cli.health_max_drop,"rollouts":reflected,"history":recent});
-        if b.reservation(&context, &editor::proposal_schema(), cli.max_output_tokens)
-            > b.remaining()
-        {
-            stop_reason = "inference_budget".into();
-            events.emit(json!({"type":"phase","phase":"budget","message":"Inference budget reached. Saving the best checkpoint"}))?;
+    for turn in 1_u64.. {
+        if turn_limit_reached(cli.max_turns, turn) {
             break;
         }
-        events.emit(json!({"type":"phase","phase":"reflecting","turn":turn,"message":format!("Reflecting on rollouts · turn {turn}")}))?;
-        let proposal = match frontier(
+        let parent_turn = best_turn;
+        events.stage("assess", "completed", turn, "Reviewing the retained checkpoint's measured answers and previous outcomes; no new test is implied", json!({"source_turn":best_turn,"metrics":best["metrics"],"baseline_metrics":baseline["metrics"],"health":best["health"]["metrics"]}))?;
+        events.stage(
+            "inspect",
+            "started",
+            turn,
+            "Inspecting current token rows and tokenizer mappings without reading held-out tests",
+            json!({}),
+        )?;
+        let mut inspection = match w
+            .request(
+                json!({"command":"inspect","token_texts":inspection_texts(&cli.goal, &best)}),
+                events,
+            )
+            .await
+        {
+            Ok(value) => value,
+            Err(error) => {
+                events.stage(
+                    "inspect",
+                    "failed",
+                    turn,
+                    "Model inspection failed; retaining the last measured checkpoint",
+                    json!({"error":format!("{error:#}")}),
+                )?;
+                stop_reason = format!("inspection_stopped: {error:#}");
+                break;
+            }
+        };
+        write_json(
+            &output.join(format!("inspection-{turn:03}.json")),
+            &inspection,
+        )?;
+        events.stage(
+            "inspect",
+            "completed",
+            turn,
+            "Tokenizer rows, tied aliases and current row norms were inspected",
+            json!({"inspection":inspection}),
+        )?;
+        let context = json!({"task":"Choose a justified next edit using lightweight discovery and read-only tools, or stop. Skills are optional guidance, not a whitelist. Inspect exact target names/token IDs before proposing. Use a custom public strategy when justified by measurements and supported operations. Prefer the provided edit tools to custom gradient optimisers. Inspect additional measured rollouts/history only when needed. Public summaries explain the choice and previous measured outcomes. Candidate changes start from retained weights. Improve validation; reference-loss breaks score ties only when measured. Preservation must pass. Never request sealed tests.","goal":cli.goal,"controls":cli.controls,"dataset_mode":data.mode,"metric":key,"turn":turn,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"best_metrics":agent_tools::measurements(&best["metrics"]),"baseline_metrics":agent_tools::measurements(&baseline["metrics"]),"recent_outcomes":agent_tools::history_summary(&history,3),"health":agent_tools::health_comparison(&best["health"]["metrics"],&baseline["health"]["metrics"]),"health_max_drop":cli.health_max_drop,"target_count":info["editable"].as_array().map(Vec::len),"token_candidate_count":inspection["token_candidates"].as_array().map(Vec::len)});
+        events.stage("plan", "started", turn, "The editor is discovering relevant skills and inspecting evidence before choosing a patch", json!({}))?;
+        events.emit(json!({"type":"phase","phase":"reflecting","turn":turn,"message":format!("Choosing a skill and inspecting evidence · turn {turn}")}))?;
+        let proposal = match plan_with_tools(
             cli,
             editor_model,
             &context,
-            &editor::proposal_schema(),
+            &info,
+            &mut inspection,
+            &history,
+            &best,
+            &data.mode,
+            &mut w,
             output,
-            &format!("turn-{turn:03}"),
+            turn,
             events,
             b,
         )
         .await
         {
-            Ok(p) => p,
+            Ok(Some(proposal)) => proposal,
+            Ok(None) => {
+                events.stage(
+                    "plan",
+                    "completed",
+                    turn,
+                    "Editor stopped without proposing another patch",
+                    json!({"weights_changed":false}),
+                )?;
+                stop_reason = "editor_finished".into();
+                break;
+            }
             Err(e) => {
+                events.stage(
+                    "plan",
+                    "failed",
+                    turn,
+                    "Editor planning stopped; no candidate patch was applied",
+                    json!({"error":format!("{e:#}")}),
+                )?;
                 stop_reason = format!("editor_stopped: {e:#}");
                 events.emit(json!({"type":"phase","phase":"saving","message":format!("Editor stopped. Saving the retained checkpoint: {e}")}))?;
                 break;
             }
         };
+        write_json(
+            &output.join(format!("inspection-{turn:03}.json")),
+            &inspection,
+        )?;
+        events.stage(
+            "plan",
+            "completed",
+            turn,
+            proposal["plan"]
+                .as_str()
+                .unwrap_or("A candidate patch was proposed"),
+            json!({"proposal":proposal}),
+        )?;
         let proposed =
             json!({"type":"proposal","turn":turn,"parent_turn":parent_turn,"proposal":proposal});
         events.record("event", &proposed)?;
@@ -1086,16 +1446,44 @@ async fn run(
                 {
                     bail!("This dataset does not support the proposed operation");
                 }
-                Ok(())
+                search::validate_inspected_rows(&proposal, &inspection)
             });
         if let Err(e) = proposal_validation {
+            events.stage(
+                "patch",
+                "skipped",
+                turn,
+                "Proposal validation failed; no weights changed",
+                json!({"error":format!("{e:#}")}),
+            )?;
+            events.stage(
+                "test",
+                "skipped",
+                turn,
+                "No candidate was applied to test",
+                json!({}),
+            )?;
+            events.stage(
+                "decide",
+                "completed",
+                turn,
+                "Rejected the invalid proposal; retained weights are unchanged",
+                json!({"accepted":false,"decision_reason":format!("{e:#}")}),
+            )?;
             let record = json!({"turn":turn,"parent_turn":parent_turn,"accepted":false,"proposal":proposal,"error":format!("{e:#}"),"metrics":best["metrics"]});
             write_json(&output.join(format!("turn-{turn:03}.json")), &record)?;
             events.record("turn", &record)?;
             history.push(record);
-            events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"max_turns":cli.max_turns,"metric":key,"accepted":false,"metrics":Value::Null,"health":Value::Null,"best_health":best["health"]["metrics"],"rationale":proposal["rationale"],"decision_reason":format!("Proposal rejected: {e}"),"best_metrics":best["metrics"]}))?;
+            events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"metric":key,"accepted":false,"metrics":Value::Null,"health":Value::Null,"best_health":best["health"]["metrics"],"rationale":proposal["rationale"],"decision_reason":format!("Proposal rejected: {e}"),"best_metrics":best["metrics"]}))?;
             continue;
         }
+        events.stage(
+            "patch",
+            "started",
+            turn,
+            "Applying the bounded candidate patch to the working model",
+            json!({"proposal":proposal}),
+        )?;
         events.emit(json!({"type":"phase","phase":"editing","turn":turn,"message":format!("Applying {} alteration",proposal["operation"].as_str().unwrap_or("tensor"))}))?;
         let alteration = match w
             .request(
@@ -1110,22 +1498,72 @@ async fn run(
                     return Err(e);
                 }
                 let reason = format!("{e:#}");
+                events.stage(
+                    "patch",
+                    "failed",
+                    turn,
+                    "The worker rejected the patch; no candidate was retained",
+                    json!({"error":reason}),
+                )?;
+                events.stage(
+                    "test",
+                    "skipped",
+                    turn,
+                    "No candidate was applied to test",
+                    json!({}),
+                )?;
+                events.stage(
+                    "decide",
+                    "completed",
+                    turn,
+                    "Retaining the previous checkpoint after patch rejection",
+                    json!({"accepted":false,"decision_reason":reason}),
+                )?;
                 let record = json!({"turn":turn,"parent_turn":parent_turn,"accepted":false,"proposal":proposal,"error":reason,"metrics":best["metrics"]});
                 write_json(&output.join(format!("turn-{turn:03}.json")), &record)?;
                 events.record("turn", &record)?;
                 history.push(record);
-                events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"max_turns":cli.max_turns,"metric":key,"accepted":false,"metrics":Value::Null,"health":Value::Null,"best_health":best["health"]["metrics"],"rationale":proposal["rationale"],"decision_reason":reason,"best_metrics":best["metrics"]}))?;
+                events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"metric":key,"accepted":false,"metrics":Value::Null,"health":Value::Null,"best_health":best["health"]["metrics"],"rationale":proposal["rationale"],"decision_reason":reason,"best_metrics":best["metrics"]}))?;
                 continue;
             }
         };
+        let saved_patch = w
+            .request(
+                json!({"command":"patch_candidate","directory":journal,"turn":turn}),
+                events,
+            )
+            .await?;
+        write_json(&output.join("patches.json"), &saved_patch)?;
+        w.request(
+            json!({"command":"patch_export","directory":journal,"path":output.join("patches.zip")}),
+            events,
+        )
+        .await?;
+        events.stage(
+            "patch",
+            "completed",
+            turn,
+            "Candidate weight changes were applied and measured; they are not retained yet",
+            json!({"mutation":alteration}),
+        )?;
+        events.stage(
+            "test",
+            "started",
+            turn,
+            "Running the candidate against validation and preservation examples",
+            json!({}),
+        )?;
         let mut candidate=match w.request(json!({"command":"evaluate","splits":splits,"max_new_tokens":cli.max_new_tokens,"label":format!("turn-{turn:03}"),"turn":turn,"receipt":{"file":format!("turn-{turn:03}.json"),"pointer":"/evaluation/samples"}}),events).await {
             Ok(v)=>v,
             Err(e)=>{
                 if e.downcast_ref::<worker::Rejection>().is_none(){return Err(e);}
                 w.request(json!({"command":"rollback"}),events).await?;
+                finish_patch(cli, &mut w, output, turn, false, false, events).await?;
+                events.stage("test", "failed", turn, &format!("Candidate evaluation failed: {e}"), json!({}))?;
+                events.stage("decide", "completed", turn, "Candidate rolled back after evaluation failure", json!({"accepted":false,"metrics":best["metrics"]}))?;
                 let record=json!({"turn":turn,"parent_turn":parent_turn,"accepted":false,"proposal":proposal,"alteration":alteration,"error":format!("{e:#}"),"metrics":best["metrics"]});
                 write_json(&output.join(format!("turn-{turn:03}.json")),&record)?;events.record("turn", &record)?;history.push(record);
-                events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"mutation":alteration,"max_turns":cli.max_turns,"metric":key,"accepted":false,"metrics":Value::Null,"health":Value::Null,"best_health":best["health"]["metrics"],"rationale":proposal["rationale"],"decision_reason":format!("Candidate rejected: {e}"),"best_metrics":best["metrics"]}))?;
+                events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"mutation":alteration,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"metric":key,"accepted":false,"metrics":Value::Null,"health":Value::Null,"best_health":best["health"]["metrics"],"rationale":proposal["rationale"],"decision_reason":format!("Candidate rejected: {e}"),"best_metrics":best["metrics"]}))?;
                 continue;
             }
         };
@@ -1135,11 +1573,14 @@ async fn run(
                 Err(error) => {
                     if error.downcast_ref::<worker::Rejection>().is_none() { return Err(error); }
                     w.request(json!({"command":"rollback"}), events).await?;
+                finish_patch(cli, &mut w, output, turn, false, false, events).await?;
+                events.stage("test", "failed", turn, &format!("Candidate checks stopped: {error}"), json!({}))?;
+                events.stage("decide", "completed", turn, "Candidate rolled back because checks did not complete", json!({"accepted":false,"metrics":best["metrics"]}))?;
                     let record = json!({"turn":turn,"parent_turn":parent_turn,"accepted":false,"proposal":proposal,"alteration":alteration,"evaluation":candidate,"error":format!("{error:#}")});
                     write_json(&output.join(format!("turn-{turn:03}.json")), &record)?;
                     events.record("turn", &record)?;
                     history.push(record);
-                    events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"mutation":alteration,"max_turns":cli.max_turns,"metric":key,"accepted":false,"metrics":candidate["metrics"],"health":candidate["health"]["metrics"],"best_metrics":best["metrics"],"best_health":best["health"]["metrics"],"rationale":proposal["rationale"],"decision_reason":format!("Candidate rejected: {error}")}))?;
+                    events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"mutation":alteration,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"metric":key,"accepted":false,"metrics":candidate["metrics"],"health":candidate["health"]["metrics"],"best_metrics":best["metrics"],"best_health":best["health"]["metrics"],"rationale":proposal["rationale"],"decision_reason":format!("Candidate rejected: {error}")}))?;
                     stop_reason = format!("health_stopped: {error:#}");
                     events.emit(json!({"type":"phase","phase":"saving","message":"Health evaluation stopped. Saving the retained checkpoint"}))?;
                     break;
@@ -1162,11 +1603,26 @@ async fn run(
             .await
             {
                 w.request(json!({"command":"rollback"}), events).await?;
+                finish_patch(cli, &mut w, output, turn, false, false, events).await?;
+                events.stage(
+                    "test",
+                    "failed",
+                    turn,
+                    &format!("Candidate checks stopped: {e}"),
+                    json!({}),
+                )?;
+                events.stage(
+                    "decide",
+                    "completed",
+                    turn,
+                    "Candidate rolled back because checks did not complete",
+                    json!({"accepted":false,"metrics":best["metrics"]}),
+                )?;
                 let record = json!({"turn":turn,"parent_turn":parent_turn,"accepted":false,"proposal":proposal,"alteration":alteration,"evaluation":candidate,"error":format!("{e:#}")});
                 write_json(&output.join(format!("turn-{turn:03}.json")), &record)?;
                 events.record("turn", &record)?;
                 history.push(record);
-                events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"mutation":alteration,"max_turns":cli.max_turns,"metric":key,"accepted":false,"metrics":candidate["metrics"],"health":candidate["health"]["metrics"],"best_metrics":best["metrics"],"best_health":best["health"]["metrics"],"rationale":proposal["rationale"],"decision_reason":format!("Candidate rejected: {e}")}))?;
+                events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"mutation":alteration,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"metric":key,"accepted":false,"metrics":candidate["metrics"],"health":candidate["health"]["metrics"],"best_metrics":best["metrics"],"best_health":best["health"]["metrics"],"rationale":proposal["rationale"],"decision_reason":format!("Candidate rejected: {e}")}))?;
                 stop_reason = format!("scoring_stopped: {e:#}");
                 events.emit(json!({"type":"phase","phase":"saving","message":"Scoring stopped. Saving the retained checkpoint"}))?;
                 break;
@@ -1203,16 +1659,32 @@ async fn run(
             .await
             {
                 w.request(json!({"command":"rollback"}), events).await?;
+                finish_patch(cli, &mut w, output, turn, false, false, events).await?;
+                events.stage(
+                    "test",
+                    "failed",
+                    turn,
+                    &format!("Candidate checks stopped: {error}"),
+                    json!({}),
+                )?;
+                events.stage(
+                    "decide",
+                    "completed",
+                    turn,
+                    "Candidate rolled back because checks did not complete",
+                    json!({"accepted":false,"metrics":best["metrics"]}),
+                )?;
                 let record = json!({"turn":turn,"parent_turn":parent_turn,"accepted":false,"proposal":proposal,"alteration":alteration,"evaluation":candidate,"error":format!("{error:#}")});
                 write_json(&output.join(format!("turn-{turn:03}.json")), &record)?;
                 events.record("turn", &record)?;
                 history.push(record);
-                events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"mutation":alteration,"max_turns":cli.max_turns,"metric":key,"accepted":false,"metrics":candidate["metrics"],"health":candidate["health"]["metrics"],"best_metrics":best["metrics"],"best_health":best["health"]["metrics"],"rationale":proposal["rationale"],"decision_reason":format!("Candidate rejected: {error}")}))?;
+                events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"mutation":alteration,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"metric":key,"accepted":false,"metrics":candidate["metrics"],"health":candidate["health"]["metrics"],"best_metrics":best["metrics"],"best_health":best["health"]["metrics"],"rationale":proposal["rationale"],"decision_reason":format!("Candidate rejected: {error}")}))?;
                 stop_reason = format!("controls_stopped: {error:#}");
                 events.emit(json!({"type":"phase","phase":"saving","message":"Controls check stopped. Saving the retained checkpoint"}))?;
                 break;
             }
         }
+        events.stage("test", "completed", turn, "Candidate answers, objective scores and preservation outcomes were measured", json!({"metrics":candidate["metrics"],"health":candidate["health"]["metrics"],"controls":candidate["controls"]}))?;
         let retain = objective_improved
             && health_passed
             && (cli.controls.trim().is_empty() || candidate["controls"]["passed"] == true);
@@ -1232,6 +1704,8 @@ async fn run(
             events,
         )
         .await?;
+        finish_patch(cli, &mut w, output, turn, retain, true, events).await?;
+        events.stage("decide", "completed", turn, if retain {"Retained the measured improvement as the next starting point"} else {"Rolled back the candidate to the previous retained checkpoint"}, json!({"accepted":retain,"decision_reason":decision_reason,"metrics":candidate["metrics"],"parent_turn":parent_turn}))?;
         let record = json!({"turn":turn,"parent_turn":parent_turn,"accepted":retain,"proposal":proposal,"alteration":alteration,"evaluation":candidate,"health_passed":health_passed,"decision_reason":decision_reason});
         write_json(&output.join(format!("turn-{turn:03}.json")), &record)?;
         events.record("turn", &record)?;
@@ -1241,20 +1715,29 @@ async fn run(
             best_turn = turn;
             accepted += 1;
         }
-        events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"max_turns":cli.max_turns,"metric":key,"accepted":retain,"metrics":candidate["metrics"],"health":candidate["health"]["metrics"],"best_health":best["health"]["metrics"],"health_passed":health_passed,"rationale":proposal["rationale"],"decision_reason":decision_reason,"mutation":alteration,"best_metrics":best["metrics"]}))?;
+        events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"metric":key,"accepted":retain,"metrics":candidate["metrics"],"health":candidate["health"]["metrics"],"best_health":best["health"]["metrics"],"health_passed":health_passed,"rationale":proposal["rationale"],"decision_reason":decision_reason,"mutation":alteration,"best_metrics":best["metrics"]}))?;
     }
     events.emit(
-        json!({"type":"phase","phase":"saving","message":"Saving the retained checkpoint"}),
+        json!({"type":"phase","phase":"saving","message":if cli.save_format=="model"{"Saving compact patches and materialising the retained model"}else{"Saving compact latest and best replayable patches"}}),
     )?;
-    let checkpoint = w
+    let patch_bundle = w
         .request(
-            json!({"command":"save","path":output.join("checkpoint")}),
+            json!({"command":"patch_export","directory":journal,"path":output.join("patches.zip")}),
             events,
         )
         .await?;
-    write_json(&output.join("checkpoint.json"), &checkpoint)?;
+    write_json(&output.join("patch-bundle.json"), &patch_bundle)?;
+    if cli.save_format == "model" {
+        let checkpoint = w
+            .request(
+                json!({"command":"save","path":output.join("checkpoint")}),
+                events,
+            )
+            .await?;
+        write_json(&output.join("checkpoint.json"), &checkpoint)?;
+    }
     w.stop().await;
-    events.emit(json!({"type":"phase","phase":"verifying","message":"Reloading the saved checkpoint and verifying its rollouts"}))?;
+    events.emit(json!({"type":"phase","phase":"verifying","message":if cli.save_format=="model"{"Reloading the saved checkpoint and verifying its rollouts"}else{"Replaying the best patch on its pinned base and verifying the resulting rollouts"}}))?;
     let mut fresh = worker::Worker::spawn(
         &python_path(&cli.python),
         &output.join("worker.py"),
@@ -1262,9 +1745,23 @@ async fn run(
         cli.hf_token.as_deref(),
     )?;
     let mut reload = init;
-    reload["model"] = json!(output.join("checkpoint"));
-    reload["revision"] = Value::Null;
+    if cli.save_format == "model" {
+        reload["model"] = json!(output.join("checkpoint"));
+        reload["revision"] = Value::Null;
+    } else {
+        // Reload the same pinned base, then replay exact stored after-values.
+        reload["revision"] = info["revision"].clone();
+    }
     fresh.request(reload, events).await?;
+    if cli.save_format == "patch" {
+        let verified = fresh
+            .request(
+                json!({"command":"patch_restore","directory":journal,"which":"best"}),
+                events,
+            )
+            .await?;
+        write_json(&output.join("patch-reload.json"), &verified)?;
+    }
     let mut final_splits = splits.clone();
     if data.counts.contains_key("test") {
         final_splits.push("test");
@@ -1342,7 +1839,7 @@ async fn run(
     fresh.stop().await;
     final_eval["controls"] = best["controls"].clone();
     write_json(&output.join("reloaded.json"), &final_eval)?;
-    let report = json!({"status":"complete","dataset_mode":data.mode,"stop_reason":stop_reason,"final_scoring_error":final_scoring_error,"metric":key,"accepted_turns":accepted,"best_turn":best_turn,"turns":history.len(),"baseline_metrics":baseline["metrics"],"best_metrics":best["metrics"],"final_metrics":final_eval["metrics"],"reload_verified":true,"controls":best["controls"],"trajectory":if cli.save_trajectory{json!("trajectory.jsonl")}else{Value::Null},"baseline_health":baseline["health"]["metrics"],"best_health":best["health"]["metrics"],"final_health":final_eval["health"]["metrics"],"health_checks":cli.health_checks,"health_max_drop":cli.health_max_drop,"budget":b,"checkpoint":output.join("checkpoint"),"history":history,"assessment":assessment});
+    let report = json!({"status":"complete","dataset_mode":data.mode,"stop_reason":stop_reason,"final_scoring_error":final_scoring_error,"metric":key,"accepted_turns":accepted,"best_turn":best_turn,"turns":history.len(),"baseline_metrics":baseline["metrics"],"best_metrics":best["metrics"],"final_metrics":final_eval["metrics"],"reload_verified":true,"controls":best["controls"],"trajectory":if cli.save_trajectory{json!("trajectory.jsonl")}else{Value::Null},"baseline_health":baseline["health"]["metrics"],"best_health":best["health"]["metrics"],"final_health":final_eval["health"]["metrics"],"health_checks":cli.health_checks,"health_max_drop":cli.health_max_drop,"budget":b,"save_format":cli.save_format,"patches":patch_bundle,"checkpoint":if cli.save_format=="model"{json!(output.join("checkpoint"))}else{Value::Null},"history":history,"assessment":assessment});
     write_json(&output.join("report.json"), &report)?;
     Ok(report)
 }
@@ -1355,7 +1852,7 @@ async fn check_controls(
     candidate: &mut Value,
     output: &Path,
     label: &str,
-    turn: u32,
+    turn: u64,
     events: &Events,
     b: &mut budget::Budget,
 ) -> Result<()> {
@@ -1424,7 +1921,7 @@ async fn judge(
     evaluation: &mut Value,
     output: &Path,
     label: &str,
-    turn: u32,
+    turn: u64,
     events: &Events,
     b: &mut budget::Budget,
     cache: &mut scoring::Cache,
@@ -1458,8 +1955,100 @@ async fn judge(
     Ok(())
 }
 
+async fn finish_patch(
+    cli: &Cli,
+    worker: &mut worker::Worker,
+    output: &Path,
+    turn: u64,
+    accepted: bool,
+    measured: bool,
+    events: &Events,
+) -> Result<()> {
+    let directory = output.join("patches");
+    let receipt = worker.request(json!({"command":"patch_finalize","directory":directory,"turn":turn,"accepted":accepted}), events).await?;
+    write_json(&output.join("patches.json"), &receipt)?;
+    let bundle = worker.request(json!({"command":"patch_export","directory":directory,"path":output.join("patches.zip")}), events).await?;
+    events.emit(json!({"type":"patch_checkpoint","turn":turn,"status":"saved","accepted":accepted,"latest":receipt["latest"],"best":receipt["best"],"bundle_bytes":bundle["bytes"]}))?;
+    if cli.patch_backup && measured {
+        let repo = cli
+            .patch_repo
+            .as_deref()
+            .context("Private patch repository is missing")?;
+        let token = cli
+            .hf_token
+            .as_deref()
+            .context("Explicit patch backup token is missing")?;
+        let mut command = tokio::process::Command::new(python_path(&cli.python));
+        command
+            .arg(output.join("patches.py"))
+            .arg("backup")
+            .arg("--directory")
+            .arg(&directory)
+            .args(["--repo", repo, "--authorized"]);
+        if cli.patch_create {
+            command.arg("--create");
+        }
+        command
+            .env("HF_TOKEN", token)
+            .env("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
+            .kill_on_drop(true);
+        let response = command
+            .output()
+            .await
+            .context("Could not start private patch backup; local patches remain saved")?;
+        let mut text = String::from_utf8_lossy(&response.stdout).to_string();
+        if !token.is_empty() {
+            text = text.replace(token, "[redacted]");
+        }
+        let backup: Value = serde_json::from_str(&text).unwrap_or_else(|_|json!({"error":"Private backup returned an invalid receipt; check the repository before retrying"}));
+        write_json(
+            &output.join(format!("patch-backup-{turn:03}.json")),
+            &backup,
+        )?;
+        if !response.status.success() || backup["verified"] != true {
+            events.emit(json!({"type":"patch_checkpoint","turn":turn,"status":"backup_failed","local_saved":true}))?;
+            bail!("Private patch backup was not verified. Local latest/best patches are saved; inspect the repository before retrying. {}",backup["error"].as_str().unwrap_or(""));
+        }
+        events.emit(json!({"type":"patch_checkpoint","turn":turn,"status":"backed_up","repo":repo,"revision":backup["revision"]}))?;
+    }
+    Ok(())
+}
+
+async fn validate_local_task(cli: &Cli, mode: &str) -> Result<Value> {
+    let temporary = tempfile::tempdir()?;
+    let script = temporary.path().join("task_metadata.py");
+    fs::write(&script, include_str!("../python/task_metadata.py"))?;
+    let mut command = tokio::process::Command::new(python_path(&cli.python));
+    command.arg(script).args(["--dataset-mode", mode]);
+    if let Some(task) = &cli.hf_task {
+        command.args(["--task", task]);
+    }
+    let result = command
+        .output()
+        .await
+        .context("Could not validate task metadata")?;
+    if !result.status.success() {
+        bail!("{}", String::from_utf8_lossy(&result.stderr).trim());
+    }
+    serde_json::from_slice(&result.stdout).context("Invalid task metadata result")
+}
+
 async fn utility(command: &Commands, cli: &Cli) -> Result<()> {
     match command {
+        Commands::MaterializePatch{patch,model,revision,output,device}=>{
+            let temporary=tempfile::tempdir()?;
+            fs::write(temporary.path().join("patches.py"),include_str!("../python/patches.py"))?;
+            fs::write(temporary.path().join("worker.py"),include_str!("../python/worker.py"))?;
+            fs::write(temporary.path().join("health.py"),include_str!("../python/health.py"))?;
+            let mut command=tokio::process::Command::new(python_path(&cli.python));
+            command.arg(temporary.path().join("patches.py")).arg("materialize").arg(if patch.is_dir(){"--directory"}else{"--bundle"}).arg(patch).arg("--output").arg(output).args(["--device",device]);
+            if let Some(model)=model{command.args(["--model",&resolve_model(model)]);}
+            if let Some(revision)=revision{command.args(["--revision",revision]);}
+            if let Some(token)=&cli.hf_token{command.env("HF_TOKEN",token);}
+            let response=command.output().await.context("Could not start patch materialization")?;
+            if !response.status.success(){bail!("Patch materialization failed: {}",String::from_utf8_lossy(&response.stdout));}
+            println!("{}",String::from_utf8_lossy(&response.stdout));
+        },
         Commands::Publish{run,repo,visibility,create}=>{
             let receipt = publish::upload(&python_path(&cli.python), run, repo, visibility, *create, cli.hf_token.as_deref()).await?;
             write_json(&run.join("publish.json"), &receipt)?;
@@ -1475,13 +2064,13 @@ async fn utility(command: &Commands, cli: &Cli) -> Result<()> {
             write_json(&run.join("trajectory-publish.json"), &receipt)?;
             println!("Trajectory: {}",receipt["repo_url"].as_str().unwrap_or(repo));
         },
-        Commands::Models=>println!("Qwen3-0.8B    Qwen/Qwen3.5-0.8B\nGemma3-1B     google/gemma-3-1b-it\n\nFull Hugging Face IDs and local checkpoint paths are accepted."),
+        Commands::Models=>println!("Qwen3-0.8B    Qwen/Qwen3.5-0.8B\nGemma3-1B     google/gemma-3-1b-it\n\nThese small models have real edit/rollback/reload checks. Other IDs and local checkpoints use capability validation; listing is not a guarantee that every architecture or operation is supported."),
         Commands::Setup{python}=>{
             let dir=data_home();fs::create_dir_all(&dir)?;
             if let Some(python)=python {
                 let python=if python.is_absolute(){python.clone()}else{std::env::current_dir()?.join(python)};
                 if !python.is_file(){bail!("Python executable does not exist: {}",python.display())}
-                let status=tokio::process::Command::new(&python).args(["-c","import torch, transformers, datasets; from transformers import Qwen3_5ForConditionalGeneration, Gemma3ForCausalLM"]).status().await?;
+                let status=tokio::process::Command::new(&python).args(["-c","import torch, transformers, datasets; from transformers import AutoModelForCausalLM"]).status().await?;
                 if !status.success(){bail!("The selected Python needs PyTorch, Transformers and datasets")}
                 write_json(&dir.join("runtime.json"),&json!({"python":python}))?;
                 println!("Runtime configured: {}",python.display());
@@ -1530,7 +2119,7 @@ async fn utility(command: &Commands, cli: &Cli) -> Result<()> {
             }
             let ev=Events{tx:None,file:Mutex::new(OpenOptions::new().create_new(true).write(true).open(path.join("events.jsonl"))?),json:cli.json,quiet:false,trajectory:None};
             let mut w=worker::Worker::spawn(&runtime,&path.join("worker.py"),&path.join("worker.log"),cli.hf_token.as_deref())?;
-            w.request(json!({"command":"init","model":fs::canonicalize(checkpoint)?,"dataset":path.join("dataset.jsonl"),"device":device,"seed":cli.seed,"max_seq_length":cli.max_seq_length,"health_path":if cli.health_checks.is_empty(){Value::Null}else{json!(path.join("health.json"))}}),&ev).await?;
+            w.request(json!({"command":"init","model":fs::canonicalize(checkpoint)?,"dataset":path.join("dataset.jsonl"),"device":device,"seed":cli.seed,"max_seq_length":cli.max_seq_length,"prompt_format":cli.prompt_format,"health_path":if cli.health_checks.is_empty(){Value::Null}else{json!(path.join("health.json"))}}),&ev).await?;
             let mut evaluation=w.request(json!({"command":"evaluate","splits":data.counts.keys().collect::<Vec<_>>(),"max_new_tokens":max_new_tokens,"label":"evaluation","receipt":{"file":"evaluation.json","pointer":"/samples"}}),&ev).await?;
             if !cli.health_checks.is_empty() {
                 evaluation["health"]=w.request(json!({"command":"health","max_new_tokens":max_new_tokens,"label":"Health checks","receipt":{"file":"evaluation.json","pointer":"/health/samples"}}),&ev).await?;
@@ -1549,6 +2138,76 @@ async fn utility(command: &Commands, cli: &Cli) -> Result<()> {
 #[cfg(test)]
 mod cli_tests {
     use super::*;
+    #[test]
+    fn patch_output_and_backup_choices_never_enable_implicit_upload() {
+        let defaults = Cli::try_parse_from(["vespasian"]).unwrap();
+        assert_eq!(defaults.save_format, "model");
+        assert_eq!(defaults.prompt_format, "auto");
+        assert!(!defaults.patch_backup);
+        assert!(!defaults.patch_create);
+        assert!(defaults.patch_repo.is_none());
+        assert!(Cli::try_parse_from(["vespasian", "--patch-repo", "owner/private"]).is_err());
+        let explicit = Cli::try_parse_from([
+            "vespasian",
+            "--task",
+            "text-generation",
+            "--save-format",
+            "patch",
+            "--prompt-format",
+            "plain",
+            "--patch-backup",
+            "--patch-repo",
+            "owner/private",
+        ])
+        .unwrap();
+        assert_eq!(explicit.hf_task.as_deref(), Some("text-generation"));
+        assert_eq!(explicit.save_format, "patch");
+        assert!(explicit.patch_backup);
+        assert!(!explicit.patch_create);
+        assert_eq!(explicit.prompt_format, "plain");
+    }
+
+    #[test]
+    fn patch_materialization_is_an_explicit_separate_command() {
+        let cli = Cli::try_parse_from([
+            "vespasian",
+            "materialize-patch",
+            "patches.zip",
+            "--output",
+            "edited-model",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::MaterializePatch { .. })
+        ));
+        assert!(!cli.patch_backup);
+        assert!(cli.publish_repo.is_none());
+    }
+
+    #[test]
+    fn budget_policy_rejects_unmetered_strict_before_work() {
+        for provider in ["codex", "claude"] {
+            assert!(budget_mode(provider, "strict").is_err());
+            assert_eq!(
+                budget_mode(provider, "auto").unwrap(),
+                "estimated_between_calls"
+            );
+        }
+        for provider in ["openai", "anthropic"] {
+            assert_eq!(budget_mode(provider, "strict").unwrap(), "reserved_api");
+        }
+        assert!(budget_mode("openai", "invalid").is_err());
+    }
+    #[test]
+    fn inspection_excludes_test_samples_and_bounds_text() {
+        let data = json!({"samples":[{"split":"test","prediction":"secret"},{"split":"validation","prediction":"visible"}]});
+        let texts = inspection_texts(&Some("x".repeat(300)), &data);
+        assert_eq!(texts[0].chars().count(), 256);
+        assert!(texts.iter().any(|s| s == "visible"));
+        assert!(!texts.iter().any(|s| s == "secret"));
+    }
+
     #[test]
     fn preservation_scoring_uses_the_dataset_mode() {
         assert_eq!(
@@ -1607,6 +2266,32 @@ mod cli_tests {
             "exact_match"
         ));
     }
+    #[test]
+    fn spending_is_primary_and_turns_are_optional() {
+        let cli = Cli::try_parse_from(["vespasian"]).unwrap();
+        assert_eq!(cli.budget, 10.0);
+        assert_eq!(cli.max_turns, None);
+        assert_eq!(cli.reasoning_effort, "low");
+        assert!(!turn_limit_reached(None, 100_000));
+        assert!(!turn_limit_reached(Some(3), 3));
+        assert!(turn_limit_reached(Some(3), 4));
+        let cli = Cli::try_parse_from([
+            "vespasian",
+            "--budget",
+            "4.5",
+            "--max-turns",
+            "1001",
+            "--reasoning-effort",
+            "high",
+        ])
+        .unwrap();
+        assert_eq!(cli.budget, 4.5);
+        assert_eq!(cli.max_turns, Some(1001));
+        assert_eq!(cli.reasoning_effort, "high");
+        assert!(Cli::try_parse_from(["vespasian", "--max-turns", "0"]).is_err());
+        assert!(Cli::try_parse_from(["vespasian", "--reasoning-effort", "none"]).is_err());
+    }
+
     #[test]
     fn numeric_limits_fail_before_inference() {
         assert!(Cli::try_parse_from(["vespasian", "--seed", "4294967296"]).is_err());
@@ -1815,6 +2500,9 @@ mod cli_tests {
         apply_guided(
             &mut cli,
             wizard::WizardResult {
+                hf_task: Some("text-generation".into()),
+                prompt_format: "auto".into(),
+                save_format: "model".into(),
                 target_type: "custom".into(),
                 dataset_mode: "paired".into(),
                 text_field: String::new(),
@@ -1823,6 +2511,9 @@ mod cli_tests {
                 goal: "Solve arithmetic questions".into(),
                 metric: "semantic".into(),
                 budget: 2.,
+                budget_policy: "auto".into(),
+                max_turns: None,
+                reasoning_effort: "low".into(),
                 editor: "codex".into(),
                 editor_model: None,
                 prompt_field: "question".into(),

@@ -59,6 +59,30 @@ def proposal(instance, **changes):
 
 
 class WorkerTests(unittest.TestCase):
+    def test_public_decision_metadata_does_not_change_the_tensor_edit(self):
+        original, explained = engine(), engine()
+        request = proposal(original)
+        annotated = copy.deepcopy(request)
+        annotated["proposal"].update(strategy="direction_search", plan="Probe one seeded direction.",
+                                     reflection="No previous candidate has been measured.")
+        first, second = original.edit(request), explained.edit(annotated)
+        self.assertEqual({key: value for key, value in first.items() if key != "elapsed_seconds"},
+                         {key: value for key, value in second.items() if key != "elapsed_seconds"})
+        for name, value in original.model.state_dict().items():
+            self.assertTrue(torch.equal(value, explained.model.state_dict()[name]), name)
+
+    def test_optional_decision_metadata_is_validated_before_editing(self):
+        instance = engine()
+        for field in ("strategy", "plan", "reflection"):
+            for value in (None, 1, [], {}, "", "   "):
+                with self.subTest(field=field, value=value):
+                    with self.assertRaisesRegex(ValueError, field):
+                        instance.edit(proposal(instance, **{field: value}))
+                    self.assertFalse(instance.pending)
+        with self.assertRaisesRegex(ValueError, "only strategy"):
+            instance.edit(proposal(instance, unrecognised="extra"))
+        self.assertFalse(instance.pending)
+
     def test_component_loader_pins_revision_and_disables_remote_code(self):
         from unittest.mock import MagicMock
         tokenizer = CharacterTokenizer()
@@ -67,6 +91,7 @@ class WorkerTests(unittest.TestCase):
             model.to.return_value = model
             processor = SimpleNamespace(tokenizer=tokenizer)
             with self.subTest(architecture=architecture), \
+                 patch("worker.validate_model_contract"), \
                  patch("transformers.AutoConfig.from_pretrained", return_value=SimpleNamespace(model_type=architecture)) as config_loader, \
                  patch("transformers.AutoProcessor.from_pretrained", return_value=processor) as processor_loader, \
                  patch("transformers.AutoTokenizer.from_pretrained", return_value=tokenizer) as tokenizer_loader, \

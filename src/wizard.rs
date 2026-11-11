@@ -165,12 +165,18 @@ pub struct WizardOptions {
     pub dataset_split: String,
     pub dataset_revision: Option<String>,
     pub dataset_mode: String,
+    pub hf_task: Option<String>,
+    pub prompt_format: String,
+    pub save_format: String,
     pub text_field: Option<String>,
     pub prompt_field: Option<String>,
     pub target_field: Option<String>,
     pub goal: Option<String>,
     pub editor_model: Option<String>,
     pub budget: f64,
+    pub budget_policy: String,
+    pub max_turns: Option<u32>,
+    pub reasoning_effort: String,
     pub controls: String,
     pub hf_token: Option<String>,
     pub publish_repo: Option<String>,
@@ -197,12 +203,18 @@ impl Default for WizardOptions {
             dataset_split: "train".into(),
             dataset_revision: None,
             dataset_mode: "paired".into(),
+            hf_task: None,
+            prompt_format: "auto".into(),
+            save_format: "model".into(),
             text_field: None,
             prompt_field: None,
             target_field: None,
             goal: None,
             editor_model: None,
-            budget: 5.0,
+            budget: 10.0,
+            budget_policy: "auto".into(),
+            max_turns: None,
+            reasoning_effort: "low".into(),
             controls: String::new(),
             hf_token: None,
             publish_repo: None,
@@ -224,10 +236,16 @@ pub struct WizardResult {
     pub model: String,
     pub dataset: String,
     pub dataset_mode: String,
+    pub hf_task: Option<String>,
+    pub prompt_format: String,
+    pub save_format: String,
     pub text_field: String,
     pub goal: String,
     pub metric: String,
     pub budget: f64,
+    pub budget_policy: String,
+    pub max_turns: Option<u32>,
+    pub reasoning_effort: String,
     pub editor: String,
     pub editor_model: Option<String>,
     pub prompt_field: String,
@@ -374,9 +392,15 @@ struct Form {
     custom_model: Input,
     dataset: Input,
     dataset_mode: usize,
+    hf_task: Input,
+    prompt_format: Input,
+    save_format: Input,
     text_field: Input,
     goal: Input,
     budget: Input,
+    budget_policy: Input,
+    max_turns: Input,
+    reasoning_effort: Input,
     editor_model: Input,
     prompt_field: Input,
     target_field: Input,
@@ -422,9 +446,15 @@ impl Default for Form {
             custom_model: Input::default(),
             dataset: Input::default(),
             dataset_mode: 0,
+            hf_task: Input::default(),
+            prompt_format: Input::new("auto"),
+            save_format: Input::new("model"),
             text_field: Input::default(),
             goal: Input::default(),
-            budget: Input::new("5"),
+            budget: Input::new("10"),
+            budget_policy: Input::new("auto"),
+            max_turns: Input::default(),
+            reasoning_effort: Input::new("low"),
             editor_model: Input::default(),
             prompt_field: Input::default(),
             target_field: Input::default(),
@@ -462,7 +492,7 @@ enum Action {
     Continue,
     Cancel,
     Start(Box<WizardResult>),
-    Preview(PreviewRequest),
+    Preview(Box<PreviewRequest>),
 }
 
 impl Form {
@@ -508,6 +538,9 @@ impl Form {
                 .position(|(id, _)| *id == options.dataset_mode)
                 .unwrap_or(0),
             text_field: Input::new(options.text_field.as_deref().unwrap_or("")),
+            hf_task: Input::new(options.hf_task.as_deref().unwrap_or("")),
+            prompt_format: Input::new(&options.prompt_format),
+            save_format: Input::new(&options.save_format),
             metric: if options.dataset_mode == "paired" {
                 METRICS
                     .iter()
@@ -544,6 +577,9 @@ impl Form {
             goal: Input::new(options.goal.as_deref().unwrap_or("")),
             editor_model: Input::new(options.editor_model.as_deref().unwrap_or("")),
             budget: Input::new(&options.budget.to_string()),
+            budget_policy: Input::new(&options.budget_policy),
+            max_turns: Input::new(&options.max_turns.map(|v| v.to_string()).unwrap_or_default()),
+            reasoning_effort: Input::new(&options.reasoning_effort),
             controls: Input::new(&options.controls),
             hf_token: Input::new(options.hf_token.as_deref().unwrap_or("")),
             publish: usize::from(options.publish_repo.is_some()),
@@ -564,10 +600,10 @@ impl Form {
 
     fn dataset_field_indices(&self) -> &'static [usize] {
         match (self.remote(), self.dataset_mode) {
-            (false, 0) => &[0, 6],
-            (false, _) => &[0, 3, 6],
-            (true, 0) => &[0, 1, 2, 3, 4, 5, 6],
-            (true, _) => &[0, 1, 2, 3, 5, 6],
+            (false, 0) => &[0, 7, 6],
+            (false, _) => &[0, 7, 3, 6],
+            (true, 0) => &[0, 7, 1, 2, 3, 4, 5, 6],
+            (true, _) => &[0, 7, 1, 2, 3, 5, 6],
         }
     }
 
@@ -588,6 +624,12 @@ impl Form {
             split: self.dataset_split.text.trim().into(),
             revision: self.dataset_revision.clone(),
             dataset_mode: self.dataset_mode().into(),
+            hf_task: optional(&self.hf_task.text),
+            model_id: Some(crate::resolve_model(if self.model == 2 {
+                self.custom_model.text.trim()
+            } else {
+                MODELS[self.model].0
+            })),
             text_field: if self.dataset_mode == 1 {
                 optional(&self.text_field.text)
             } else {
@@ -673,7 +715,7 @@ impl Form {
             self.preview_scroll = 0;
         }
         self.loading_for = Some(request.clone());
-        Some(Action::Preview(request))
+        Some(Action::Preview(Box::new(request)))
     }
 
     fn accept_preview(
@@ -694,6 +736,11 @@ impl Form {
                 self.confirmed_mapping = None;
             }
             Ok(value) => {
+                if self.hf_task.text.trim().is_empty() {
+                    if let Some(task) = value["task_metadata"]["selected_task"].as_str() {
+                        self.hf_task = Input::new(task);
+                    }
+                }
                 for (input, key) in [
                     (&mut self.prompt_field, "prompt_field"),
                     (&mut self.target_field, "target_field"),
@@ -709,6 +756,7 @@ impl Form {
                 self.error = value["error"]
                     .as_str()
                     .or(value["mapping_error"].as_str())
+                    .or(value["task_metadata"]["error"].as_str())
                     .map(clean)
                     .unwrap_or_default();
                 self.preview = Some(value);
@@ -725,6 +773,8 @@ impl Form {
             && self.preview.as_ref().is_some_and(|v| {
                 v["error"].is_null()
                     && v["mapping_error"].is_null()
+                    && v["task_metadata"]["error"].is_null()
+                    && v["task_metadata"]["requires_choice"] != true
                     && v["revision"].as_str().is_some_and(|s| !s.is_empty())
                     && v["rows"].as_array().is_some_and(|r| !r.is_empty())
                     && v["dataset_mode"].as_str().unwrap_or("paired") == self.dataset_mode()
@@ -851,6 +901,7 @@ impl Form {
                 4 => Some(&mut self.target_field),
                 5 => Some(&mut self.limit),
                 6 => Some(&mut self.hf_token),
+                7 => Some(&mut self.hf_task),
                 _ => Some(&mut self.dataset),
             },
             3 => {
@@ -868,13 +919,14 @@ impl Form {
                 2 => Some(&mut self.health_drop),
                 _ => None,
             },
-            7 => {
-                if self.field == 1 {
-                    Some(&mut self.editor_model)
-                } else {
-                    Some(&mut self.budget)
-                }
-            }
+            7 => match self.field {
+                1 => Some(&mut self.editor_model),
+                2 => Some(&mut self.reasoning_effort),
+                3 => Some(&mut self.max_turns),
+                4 => Some(&mut self.budget_policy),
+                5 => Some(&mut self.prompt_format),
+                _ => Some(&mut self.budget),
+            },
             8 if self.publish == 1 && self.typing => match self.field {
                 1 => Some(&mut self.publish_visibility),
                 2 => Some(&mut self.publish_mode),
@@ -930,6 +982,14 @@ impl Form {
                 } else if !std::path::Path::new(&expand_home(source)).is_file() {
                     return Err(format!("File not found: {source}"));
                 }
+                if self.hf_task.text.trim().is_empty() && (!self.remote() || self.preview.is_some()) {
+                    return Err("Choose an HF task: text-generation, text-classification, question-answering, summarization or translation.".into());
+                }
+                if self.preview_for == self.preview_request() {
+                    if let Some(error) = self.preview.as_ref().and_then(|v| v["task_metadata"]["error"].as_str()) {
+                        return Err(clean(error));
+                    }
+                }
                 Ok(())
             }
             3 if self.goal.text.trim().is_empty() => {
@@ -965,6 +1025,23 @@ impl Form {
                     );
                 }
                 Ok(())
+            }
+            7 if !["auto", "chat", "plain"].contains(&self.prompt_format.text.trim()) => Err("Choose prompt format auto, chat or plain.".into()),
+            8 if self.save_format.text == "patch" && self.publish == 1 => Err("Patch-only output stays local. Choose full model output before model repository publication.".into()),
+            7 if !["auto", "strict"].contains(&self.budget_policy.text.trim()) => Err("Choose budget policy auto or strict.".into()),
+            7 if self.budget_policy.text.trim() == "strict" && self.editor < 2 => Err("Strict requires an API editor. Choose OpenAI or Anthropic, or accept estimated spending with auto.".into()),
+            7 if !["low", "medium", "high"].contains(&self.reasoning_effort.text.trim()) => {
+                Err("Choose reasoning effort low, medium or high.".into())
+            }
+            7 if !self.max_turns.text.trim().is_empty()
+                && !self
+                    .max_turns
+                    .text
+                    .trim()
+                    .parse::<u32>()
+                    .is_ok_and(|v| v > 0) =>
+            {
+                Err("Enter a positive whole-number turn cap, or leave it blank.".into())
             }
             7 => match self.budget.text.trim().parse::<f64>() {
                 Ok(value)
@@ -1020,6 +1097,9 @@ impl Form {
             },
             dataset: expand_home(self.dataset.text.trim()),
             dataset_mode: self.dataset_mode().into(),
+            hf_task: optional(&self.hf_task.text),
+            prompt_format: self.prompt_format.text.trim().into(),
+            save_format: self.save_format.text.trim().into(),
             text_field: if self.dataset_mode == 1 {
                 self.text_field.text.trim().into()
             } else {
@@ -1032,6 +1112,9 @@ impl Form {
                 "semantic".into()
             },
             budget: self.budget.text.trim().parse().unwrap_or(0.0),
+            budget_policy: self.budget_policy.text.trim().into(),
+            max_turns: self.max_turns.text.trim().parse().ok(),
+            reasoning_effort: self.reasoning_effort.text.trim().into(),
             editor: EDITORS[self.editor].0.into(),
             editor_model: if self.editor_model.text.trim().is_empty() {
                 None
@@ -1108,6 +1191,14 @@ impl Form {
         let previous_editor = self.editor;
         let previous_editor_default = self.default_editor_model();
         match key.code {
+            KeyCode::F(2) if self.step == 8 => {
+                self.save_format = Input::new(if self.save_format.text == "model" {
+                    "patch"
+                } else {
+                    "model"
+                });
+            }
+
             KeyCode::Char(' ') if self.step == 5 && self.field == 0 => {
                 if let Some(item) = self.health_items.get_mut(self.health_index) {
                     item.enabled = !item.enabled;
@@ -1204,6 +1295,39 @@ impl Form {
                     self.custom_target_type = None;
                 }
             }
+            KeyCode::Up | KeyCode::Down if self.step == 7 && self.field == 5 => {
+                let choices = ["auto", "chat", "plain"];
+                let current = choices
+                    .iter()
+                    .position(|v| *v == self.prompt_format.text)
+                    .unwrap_or(0);
+                let next = if key.code == KeyCode::Up {
+                    (current + 2) % 3
+                } else {
+                    (current + 1) % 3
+                };
+                self.prompt_format = Input::new(choices[next]);
+            }
+            KeyCode::Up | KeyCode::Down if self.step == 7 && self.field == 4 => {
+                self.budget_policy = Input::new(if self.budget_policy.text == "strict" {
+                    "auto"
+                } else {
+                    "strict"
+                });
+            }
+            KeyCode::Up | KeyCode::Down if self.step == 7 && self.field == 2 => {
+                let choices = ["low", "medium", "high"];
+                let current = choices
+                    .iter()
+                    .position(|v| *v == self.reasoning_effort.text)
+                    .unwrap_or(0);
+                let next = if key.code == KeyCode::Up {
+                    (current + 2) % 3
+                } else {
+                    (current + 1) % 3
+                };
+                self.reasoning_effort = Input::new(choices[next]);
+            }
             KeyCode::Up | KeyCode::Down if self.step == 7 && self.field == 1 => {
                 let choices = self.suggested_models();
                 let current = choices
@@ -1261,7 +1385,13 @@ impl Form {
                     } else {
                         (self.field + 1) % 3
                     };
-                } else if matches!(self.step, 3 | 7) {
+                } else if self.step == 7 {
+                    self.field = if key.code == KeyCode::BackTab {
+                        (self.field + 5) % 6
+                    } else {
+                        (self.field + 1) % 6
+                    };
+                } else if self.step == 3 {
                     self.field = (self.field + 1) % 2;
                 } else if (self.step == 8 && self.publish == 1)
                     || (self.step == 9 && self.trajectory == 2)
@@ -1437,7 +1567,7 @@ pub fn wizard(options: WizardOptions) -> Result<Option<WizardResult>> {
                 Action::Start(result) => return Ok(Some(*result)),
                 Action::Preview(request) => {
                     preview.set_token(optional(&form.hf_token.text));
-                    if let Err(error) = preview.start(request) {
+                    if let Err(error) = preview.start(*request) {
                         form.loading_for = None;
                         form.error = clean(&error.to_string());
                     }
@@ -1779,38 +1909,48 @@ fn render_step(frame: &mut Frame, area: Rect, form: &Form) {
         5 => render_health_setup(frame, area, form),
         6 => render_options(frame, area, &EDITORS, form.editor, true),
         7 => {
-            let sections = Layout::vertical([
-                Constraint::Length(3),
-                Constraint::Length(3),
-                Constraint::Min(0),
-            ])
-            .split(area);
-            render_input(
-                frame,
-                sections[0],
-                "Budget · USD",
-                &form.budget,
-                form.field == 0,
-                "5.00",
-            );
-            render_input(
-                frame,
-                sections[1],
-                "Frontier model",
-                &form.editor_model,
-                form.field == 1,
-                form.default_editor_model(),
-            );
+            let fields = [
+                ("Budget · USD", &form.budget, "10.00"),
+                (
+                    "Frontier model",
+                    &form.editor_model,
+                    form.default_editor_model(),
+                ),
+                ("Reasoning effort · ↑/↓", &form.reasoning_effort, "low"),
+                ("Turn cap · optional", &form.max_turns, "No turn cap"),
+                ("Budget policy · ↑/↓", &form.budget_policy, "auto"),
+                (
+                    "Prompt format · ↑/↓",
+                    &form.prompt_format,
+                    "auto; plain for a model without a chat template",
+                ),
+            ];
+            let visible = ((area.height.saturating_sub(2) / 3) as usize).clamp(1, 6);
+            let first = form.field.saturating_sub(visible - 1).min(6 - visible);
+            let mut constraints = vec![Constraint::Length(3); visible];
+            constraints.push(Constraint::Min(0));
+            let sections = Layout::vertical(constraints).split(area);
+            for (row, index) in (first..first + visible).enumerate() {
+                let (label, value, hint) = fields[index];
+                render_input(
+                    frame,
+                    sections[row],
+                    label,
+                    value,
+                    form.field == index,
+                    hint,
+                );
+            }
             let explanation = if form.editor < 2 {
-                "Estimated cost is checked between calls."
+                "Auto: estimated between calls, not a hard cap. Strict requires an API editor."
             } else {
-                "Requests reserve budget before inference."
+                "Requests reserve cost at configured rates before inference. GPU costs are separate."
             };
             frame.render_widget(
-                Paragraph::new(format!("The budget covers assessment, proposals, goal scoring and control checks.\n{explanation}"))
+                Paragraph::new(format!("Tab changes settings. A blank turn cap leaves spending as the limit. {explanation}"))
                     .style(Style::default().fg(MUTED))
                     .wrap(Wrap { trim: true }),
-                sections[2],
+                sections[visible],
             );
         }
         8 => render_publish(frame, area, form),
@@ -1819,7 +1959,7 @@ fn render_step(frame: &mut Frame, area: Rect, form: &Form) {
     }
 }
 
-fn dataset_fields(form: &Form) -> [(&str, &Input, &str); 7] {
+fn dataset_fields(form: &Form) -> [(&str, &Input, &str); 8] {
     [
         ("Dataset", &form.dataset, "hf://organisation/dataset"),
         ("Configuration", &form.dataset_config, "auto"),
@@ -1835,6 +1975,11 @@ fn dataset_fields(form: &Form) -> [(&str, &Input, &str); 7] {
             "HF token · optional",
             &form.hf_token,
             "Public data or HF login",
+        ),
+        (
+            "HF task · text adaptation",
+            &form.hf_task,
+            "Choose explicitly, or inspect tagged Hub data",
         ),
     ]
 }
@@ -2212,6 +2357,17 @@ fn render_trajectory_setup(frame: &mut Frame, area: Rect, form: &Form) {
 }
 
 fn render_publish(frame: &mut Frame, area: Rect, form: &Form) {
+    let layout = Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).split(area);
+    frame.render_widget(
+        Paragraph::new(format!(
+            "Output: {} · F2 toggles full model / compact patch",
+            form.save_format.text
+        ))
+        .style(Style::default().fg(COPPER))
+        .wrap(Wrap { trim: true }),
+        layout[0],
+    );
+    let area = layout[1];
     if !form.typing {
         render_options(frame, area, &PUBLISH, form.publish, true);
         return;
@@ -2490,6 +2646,27 @@ fn render_preview(frame: &mut Frame, area: Rect, form: &Form) {
             ),
             Style::default().fg(MUTED),
         ));
+        if let Some(task) = preview["task_metadata"]["selected_task"].as_str() {
+            lines.push(Line::styled(
+                format!("Task: {} · text generation adapter", clean(task)),
+                Style::default().fg(MUTED),
+            ));
+        }
+        if let Some(tag) = preview["task_metadata"]["model_pipeline_tag"].as_str() {
+            lines.push(Line::styled(
+                format!(
+                    "Model tag: {} · not a capability guarantee",
+                    clean(&tag.chars().take(100).collect::<String>())
+                ),
+                Style::default().fg(MUTED),
+            ));
+        }
+        if let Some(warning) = preview["task_metadata"]["warning"].as_str() {
+            lines.push(Line::styled(
+                clean(&warning.chars().take(300).collect::<String>()),
+                Style::default().fg(COPPER),
+            ));
+        }
         lines.push(Line::raw(""));
     }
     if confirmed {
@@ -2687,6 +2864,26 @@ fn render_review(frame: &mut Frame, area: Rect, form: &Form) {
             ),
         ),
         review_line("Budget", &format!("${:.2} USD", result.budget)),
+        review_line("Reasoning effort", &result.reasoning_effort),
+        review_line(
+            "Budget policy",
+            &format!(
+                "{} · {}",
+                result.budget_policy,
+                if form.editor < 2 {
+                    "estimated between calls; may overrun"
+                } else {
+                    "reserve before calls at configured rates"
+                }
+            ),
+        ),
+        review_line(
+            "Turn cap",
+            &result
+                .max_turns
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "None · spending governs".into()),
+        ),
         review_line("Upload", &upload),
         review_line(
             "Measure",
@@ -2769,6 +2966,12 @@ fn render_review(frame: &mut Frame, area: Rect, form: &Form) {
             ));
         }
     }
+    lines.push(review_line("Prompt", &result.prompt_format));
+    lines.push(review_line("Output", &result.save_format));
+    lines.push(review_line(
+        "HF task",
+        result.hf_task.as_deref().unwrap_or("not selected"),
+    ));
     lines.push(review_line("Objective", &result.goal));
     if !result.controls.is_empty() {
         lines.push(review_line("Keep intact", &result.controls));
@@ -2804,8 +3007,54 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
+    #[test]
+    fn task_choice_is_explicit_separate_and_invalidates_preview() {
+        let mut form = prepared();
+        assert_eq!(form.result().hf_task.as_deref(), Some("text-generation"));
+        assert_ne!(form.result().target_type, "text-generation");
+        form.hf_task = Input::new("translation");
+        form.invalidate_preview();
+        assert!(!form.preview_ready());
+        let request = form.preview_request().unwrap();
+        assert_eq!(request.hf_task.as_deref(), Some("translation"));
+        assert_eq!(request.model_id.as_deref(), Some("Qwen/Qwen3.5-0.8B"));
+    }
+
+    #[test]
+    fn missing_local_task_requires_choice() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let mut form = Form {
+            step: 2,
+            dataset: Input::new(file.path().to_str().unwrap()),
+            ..Default::default()
+        };
+        assert!(form.validate().unwrap_err().contains("Choose an HF task"));
+        form.hf_task = Input::new("text-generation");
+        assert!(form.validate().is_ok());
+    }
+
+    #[test]
+    fn task_prompt_and_output_options_survive_and_are_visible() {
+        let mut form = Form::from_options(&WizardOptions {
+            hf_task: Some("translation".into()),
+            prompt_format: "plain".into(),
+            save_format: "patch".into(),
+            ..Default::default()
+        });
+        let result = form.result();
+        assert_eq!(result.hf_task.as_deref(), Some("translation"));
+        assert_eq!(result.prompt_format, "plain");
+        assert_eq!(result.save_format, "patch");
+        form.step = 8;
+        form.key(key(KeyCode::F(2)));
+        assert_eq!(form.result().save_format, "model");
+        form.key(key(KeyCode::F(2)));
+        form.publish = 1;
+        assert!(form.validate().unwrap_err().contains("Patch-only"));
+    }
+
     fn preview_payload() -> Value {
-        serde_json::json!({"repo":"example/questions","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","config":"main","split":"train","configs":["main"],"splits":["train","test"],"columns":[{"name":"question","dtype":"string"},{"name":"answer","dtype":"string"}],"rows":[{"question":"What colour is the sky?","answer":"Blue."},{"question":"What is two plus two?","answer":"Four."}],"prompt_field":"question","target_field":"answer","error":null,"mapping_error":null,"truncated":false})
+        serde_json::json!({"repo":"example/questions","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","config":"main","split":"train","configs":["main"],"splits":["train","test"],"columns":[{"name":"question","dtype":"string"},{"name":"answer","dtype":"string"}],"rows":[{"question":"What colour is the sky?","answer":"Blue."},{"question":"What is two plus two?","answer":"Four."}],"prompt_field":"question","target_field":"answer","error":null,"mapping_error":null,"truncated":false,"task_metadata":{"selected_task":"text-generation","requires_choice":false,"error":null}})
     }
 
     fn prepared() -> Form {
@@ -3049,6 +3298,8 @@ mod tests {
             form.step = 2;
             form.dataset = Input::new("records.jsonl");
             form.key(key(KeyCode::Tab));
+            assert_eq!(form.field, 7);
+            form.key(key(KeyCode::Tab));
             assert_eq!(form.field, 3);
             form.input().unwrap().insert("document.body");
             if mode == "corpus" {
@@ -3196,7 +3447,7 @@ mod tests {
         assert!(form.error.contains("JSONL"));
         form.dataset = Input::new("hf://example/questions");
         form.key(key(KeyCode::Tab));
-        assert_eq!(form.field, 1);
+        assert_eq!(form.field, 7);
         assert!(!form.preview_ready());
         let request = form.preview_request().unwrap();
         form.accept_preview(request, Ok(preview_payload()));
@@ -3268,7 +3519,7 @@ mod tests {
     }
 
     #[test]
-    fn hf_limit_and_all_seven_fields_are_validated_and_reachable() {
+    fn hf_limit_and_all_eight_fields_are_validated_and_reachable() {
         let mut form = prepared();
         for n in ["0", "4", "100001", "1.5", "NaN", ""] {
             form.limit = Input::new(n);
@@ -3279,7 +3530,7 @@ mod tests {
             assert!(form.validate().is_ok());
         }
         form.field = 0;
-        for expected in [1, 2, 3, 4, 5, 6, 0] {
+        for expected in [7, 1, 2, 3, 4, 5, 6, 0] {
             form.key(key(KeyCode::Tab));
             assert_eq!(form.field, expected);
         }
@@ -3357,6 +3608,60 @@ mod tests {
     }
 
     #[test]
+    fn runtime_controls_round_trip_and_remain_visible() {
+        let options = WizardOptions {
+            max_turns: Some(1234),
+            reasoning_effort: "high".into(),
+            ..Default::default()
+        };
+        let mut form = Form::from_options(&options);
+        form.step = 7;
+        form.editor_model = Input::new("gpt-6.1-sol");
+        assert_eq!(form.result().max_turns, Some(1234));
+        assert_eq!(form.result().reasoning_effort, "high");
+        assert_eq!(form.result().budget, 10.0);
+        for value in ["0", "-1", "2.5", "4294967296"] {
+            form.max_turns = Input::new(value);
+            assert!(form.validate().is_err());
+        }
+        form.max_turns = Input::default();
+        assert!(form.validate().is_ok());
+        assert_eq!(form.result().max_turns, None);
+        for field in 0..5 {
+            form.field = field;
+            for (width, height) in [(60, 18), (100, 32)] {
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                terminal.draw(|frame| render(frame, &form)).unwrap();
+                let text: String = terminal
+                    .backend()
+                    .buffer()
+                    .content
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect();
+                assert!(text.contains(
+                    [
+                        "Budget · USD",
+                        "Frontier model",
+                        "Reasoning effort",
+                        "Turn cap",
+                        "Budget policy"
+                    ][field]
+                ));
+            }
+        }
+        form.budget_policy = Input::new("strict");
+        form.editor = 0;
+        assert!(form.validate().is_err());
+        form.editor = 2;
+        assert!(form.validate().is_ok());
+        assert_eq!(form.result().budget_policy, "strict");
+        form.field = 2;
+        form.key(key(KeyCode::Down));
+        assert_eq!(form.reasoning_effort.text, "low");
+    }
+
+    #[test]
     fn nonfinite_or_nonpositive_budgets_are_rejected() {
         let mut form = Form {
             step: 7,
@@ -3402,7 +3707,7 @@ mod tests {
                     result.editor_model.as_deref(),
                     Some("chosen-frontier-model")
                 );
-                assert_eq!(result.budget, 5.0);
+                assert_eq!(result.budget, 10.0);
                 assert!(result.publish_repo.is_none());
             }
             _ => panic!("review did not start the run"),
@@ -3501,7 +3806,7 @@ mod tests {
         assert_eq!(cli.editor, "codex");
         assert_eq!(cli.metric, "auto");
         assert_eq!(cli.editor_model, None);
-        assert_eq!(cli.budget, 2.0);
+        assert_eq!(cli.budget, 10.0);
     }
 
     #[test]
@@ -3828,6 +4133,8 @@ mod tests {
             dataset: Input::new("data.jsonl"),
             ..Default::default()
         };
+        form.key(key(KeyCode::Tab));
+        assert_eq!(form.field, 7);
         form.key(key(KeyCode::Tab));
         assert_eq!(form.field, 6);
         form.input().unwrap().insert("hf_local_session");

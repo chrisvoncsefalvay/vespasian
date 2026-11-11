@@ -403,6 +403,8 @@ body{margin:0;-webkit-font-smoothing:antialiased}
   .vs-guide-body{padding:24px}.vs-guide h2{font-size:32px}
 }
 @media(max-width:480px){
+  #vs-setup-tabs [role="tablist"]{overflow-x:auto!important;flex-wrap:nowrap!important}
+  #vs-setup-tabs [role="tablist"] button{flex:0 0 auto!important;min-width:max-content!important}
   #vs-review dl,.vs-review-grid{grid-template-columns:1fr}
   .vs-chart-svg:not(.vs-chart-compact) .vs-tick{font-size:32px}
   .gradio-container{padding:0 16px!important}.vs-docs,.vs-header-links a{display:none}[data-vs-help]{margin-left:auto}
@@ -426,3 +428,36 @@ body{margin:0;-webkit-font-smoothing:antialiased}
   .vs-guide-footer{align-items:flex-start;gap:8px}.vs-guide-navigation{gap:8px}.vs-guide button{font-size:13px;padding:10px 12px}
 }
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+
+/* Observed stages never infer completion from a later activity event. */
+.vs-edit-loop{border:1px solid var(--vs-line);padding:22px;margin:20px 0 28px;background:var(--vs-panel,var(--vs-bg))}
+.vs-loop-note,.vs-budget-mode{color:var(--vs-muted);font-size:14px;line-height:1.65}
+.vs-edit-loop ol{list-style:none;padding:0;margin:18px 0 0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.vs-loop-stage{border-top:2px solid var(--vs-line);padding:12px 0 0;min-width:0}
+.vs-loop-stage>div{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.vs-loop-stage h4{font:600 15px/1.4 var(--vs-sans)!important;margin:0!important}
+.vs-loop-number{font:500 12px/1.4 var(--vs-mono);color:var(--vs-copper)}
+.vs-loop-status{font:500 11px/1.4 var(--vs-sans);color:var(--vs-muted)}
+.vs-loop-stage p{font:400 13px/1.6 var(--vs-sans);color:var(--vs-muted);margin:9px 0 0;overflow-wrap:anywhere}
+.vs-loop-started{border-top-color:var(--vs-copper)}.vs-loop-completed{border-top-color:var(--vs-copper);opacity:1}
+.vs-loop-failed{border-top-color:#d99075}.vs-loop-pending{opacity:.65}
+.vs-token-rows{margin-top:16px}.vs-token-rows code{white-space:pre-wrap;overflow-wrap:anywhere}
+.vs-tied-note{padding:10px 12px;border-left:2px solid var(--vs-copper);font-size:13px;line-height:1.6}
+@media(max-width:1000px){.vs-edit-loop ol{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:600px){.vs-edit-loop{padding:16px}.vs-edit-loop ol{grid-template-columns:1fr}.vs-loop-stage h4{font-size:15px!important}}
+
+/* Compact public receipts, not editor context or a strategy manifest. */
+.vs-agent-tools{margin-top:20px;border-top:1px solid var(--vs-line);padding-top:16px;min-width:0}
+.vs-agent-tools h4{font:600 15px/1.4 var(--vs-sans)!important;margin:0!important}
+.vs-agent-tools>p,.vs-agent-tools li p{font:400 13px/1.6 var(--vs-sans);color:var(--vs-muted);overflow-wrap:anywhere}
+.vs-agent-tools ul{list-style:none;margin:12px 0 0;padding:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.vs-agent-tools li{border-left:2px solid var(--vs-line);padding-left:12px;min-width:0}
+.vs-agent-tools li[data-vs-tool-status="failed"]{border-left-color:#d99075}
+.vs-agent-tools li>div{display:flex;gap:8px;flex-wrap:wrap;align-items:baseline}
+.vs-agent-tools li strong{font:500 13px/1.4 var(--vs-sans);overflow-wrap:anywhere}
+.vs-agent-tools li span{font:400 11px/1.4 var(--vs-sans);color:var(--vs-muted)}
+.vs-agent-tools li p{margin:5px 0 0}
+@media(max-width:600px){.vs-agent-tools ul{grid-template-columns:1fr}}
+
+.vs-patch-status { padding: 14px 16px; margin: 14px 0; border: 1px solid #434a49; overflow-wrap: anywhere; }
+.vs-patch-status p { margin: 6px 0 0; color: #aeb8b3; font-size: 13px; }

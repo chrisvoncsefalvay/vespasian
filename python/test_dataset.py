@@ -35,7 +35,7 @@ class DatasetTests(unittest.TestCase):
         self.output = Path(self.directory.name) / "data.jsonl"
         self.receipt = Path(self.directory.name) / "receipt.json"
         self.api = Mock()
-        self.api.dataset_info.return_value = SimpleNamespace(sha=SHA)
+        self.api.dataset_info.return_value = SimpleNamespace(sha=SHA, card_data={"task_categories": ["text-generation"]})
 
     def fetch(self, rows, **kwargs):
         self.stream = Stream(rows)
@@ -271,7 +271,7 @@ class DatasetTests(unittest.TestCase):
 class PreviewTests(unittest.TestCase):
     def setUp(self):
         self.api = Mock()
-        self.api.dataset_info.return_value = SimpleNamespace(sha=SHA)
+        self.api.dataset_info.return_value = SimpleNamespace(sha=SHA, card_data={"task_categories": ["text-generation"]})
         self.configs = Mock(return_value=["main"])
         self.splits = Mock(return_value=["train", "test"])
 
@@ -425,7 +425,7 @@ class PreviewTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(json.loads(stdout.getvalue()), {"rows": [], "error": None})
         preview.assert_called_once_with(repo="org/data", split="train", config=None,
-            revision=None, prompt_field=None, target_field=None, preview_rows=3, dataset_mode="paired", text_field=None)
+            revision=None, prompt_field=None, target_field=None, preview_rows=3, dataset_mode="paired", text_field=None, hf_task=None, model_id=None)
 
     def test_import_still_requires_both_output_paths(self):
         with contextlib.redirect_stderr(io.StringIO()):

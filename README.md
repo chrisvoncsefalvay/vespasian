@@ -9,7 +9,7 @@ Give a small model a behaviour to learn. Vespasian asks a frontier model to prop
 Follow the weight hill climb in your terminal. Watch the objective, health scores, generated text and active model layers. Inspect the editor's explanations and the ancestry of each candidate. Set an inference budget in dollars and take the resulting checkpoint to Hugging Face.
 
 ```sh
-vespasian examples/greetings.jsonl \
+vespasian examples/greetings.jsonl --task text-generation \
   --model Qwen3.5-0.8B \
   --goal 'Answer greetings with Salve!' \
   --budget 2 --editor codex
@@ -25,7 +25,7 @@ vespasian examples/greetings.jsonl \
 
 - **Describe the behaviour.** Use reference answers, a style corpus or prompts scored against your goal.
 - **Choose the editor.** Connect a logged-in Codex/Claude CLI or an OpenAI/Anthropic API key.
-- **Control the search.** Set the frontier model, USD budget, turn count and behaviours to preserve.
+- **Control the search.** Set the frontier model, reasoning effort, USD budget, optional turn cap and behaviours to preserve.
 - **Inspect each alteration.** Read generated answers beside the climb, layer map and candidate genealogy.
 - **Track model health.** Add copying, arithmetic, JSON and MMLU subject checks with individual example counts.
 - **Keep the run.** Save the checkpoint, measurements and editor trajectory, then publish selected outputs to Hugging Face.
@@ -100,14 +100,14 @@ Run `vespasian` without arguments for the guided terminal flow. Choose a target 
 For a repeatable command:
 
 ```sh
-vespasian examples/concise.jsonl \
+vespasian examples/concise.jsonl --task text-generation \
   --model Qwen3.5-0.8B \
   --goal 'Give the requested answer without explanation or surrounding text.' \
   --budget 2 \
   --editor codex
 ```
 
-Goals are free-form. The frontier editor first checks whether the examples support a useful experiment and selects an evaluation measure. Set `--metric exact_match`, `--metric token_f1` or `--metric semantic` to choose the measure yourself. `--max-turns` limits proposed changes independently of the dollar budget.
+Goals are free-form. The frontier editor first checks whether the examples support a useful experiment and selects an evaluation measure. Set `--metric exact_match`, `--metric token_f1` or `--metric semantic` to choose the measure yourself. `--max-turns` optionally limits proposed changes independently of the dollar budget. It has no default cap.
 
 | Example | Behaviour | Mode |
 | --- | --- | --- |
@@ -144,6 +144,8 @@ Progress bars track completed examples, proposed turns and inference spend. Load
 Use `--no-tui` for line-by-line progress or `--json` for JSONL events.
 
 ## Datasets
+
+Choose a Hugging Face task separately from the desired behaviour category. Model and dataset tags suggest tasks; they do not prove schema or architecture compatibility. Use `--task` for local data or missing/ambiguous tags. Dataset searches can filter by task, with an untagged/manual route. Verify mapped prompts and text targets, especially for classification labels and question/context datasets.
 
 Choose the data shape in the Dataset screen with **F2**, or use `--dataset-mode`:
 
@@ -252,7 +254,7 @@ The objective starts with a draft based on the chosen target column and metric. 
 Add optional checks for capabilities you want to watch during editing. Each check has its own example count, selected in the **Health checks** screen or by repeating `--health-check`:
 
 ```sh
-vespasian examples/greetings.jsonl \
+vespasian examples/greetings.jsonl --task text-generation \
   --goal 'Answer greetings with Salve!' --budget 2 \
   --health-check copying:20 \
   --health-check arithmetic:20 \
@@ -292,7 +294,7 @@ vespasian publish runs/your-run --repo your-account/your-model \
 
 Use `--visibility public` for a public repository. Omit `--create` when using an existing repository. For publication after a CLI run, add `--publish-repo`, `--publish-visibility` and, if needed, `--publish-create`.
 
-Uploads contain verified model files, a model card, aggregate measurements and file hashes. Dataset rows and editor transcripts stay local. The upload receipt is saved as `publish.json`.
+Uploads contain verified model files, a model card, aggregate measurements and file hashes. The card records the base model, measured baseline and final results, editing process, limitations and intended-use category, with a linked **Created with Vespasian** badge. Missing evaluations are marked unreported, not invented. Existing destination cards keep their metadata and prose, with an updated Vespasian section. Private objective text, dataset rows and editor transcripts stay local. The upload receipt is saved as `publish.json`.
 
 ## Editor trajectories
 
@@ -318,7 +320,9 @@ Trajectory uploads include the opted-in prompts and generated answers, plus a ma
 | `Qwen3-0.8B`, `Qwen3.5-0.8B` | [Qwen/Qwen3.5-0.8B](https://huggingface.co/Qwen/Qwen3.5-0.8B) |
 | `Gemma3-1B`, `Gemma-3-1B-IT` | [google/gemma-3-1b-it](https://huggingface.co/google/gemma-3-1b-it) |
 
-`--model` also accepts a Hub ID or local checkpoint with one of these supported architectures. Qwen's complete multimodal checkpoint and processor are saved. Editing and evaluation use text examples. Gemma downloads use your Hugging Face account's model access. `--revision` pins the model revision.
+These two small models have real edit, rollback and checkpoint-reload evidence. Gemma's existing verification covers low-rank editing, not every newer operation. Other Hub IDs and local checkpoints use a safe causal-language-model loader with capability checks, not a claim that every architecture works. Tiny local Llama and GPT-2 tests cover compatible loading and row-only editing. Quantized and noncausal checkpoints are rejected; the generic fallback also rejects missing or mismatched causal weights.
+
+Editing and evaluation use text examples. Qwen's complete multimodal checkpoint and processor are saved when a full model is requested. Gemma downloads use your Hugging Face account's model access. `--revision` pins the model revision. `--prompt-format auto` uses an available chat template; choose `--prompt-format plain` explicitly for a model without one. Space models must be configured and loaded by its operator at startup, within the deployment's resource limits.
 
 | Editor | Authentication |
 | --- | --- |
@@ -330,16 +334,20 @@ Trajectory uploads include the opted-in prompts and generated answers, plus a ma
 Select the frontier model beside the budget in the guided flow, or use `--editor-model`. Defaults are `gpt-6.1-sol` for Codex/OpenAI and `claude-sonnet-5-5` for Claude/Anthropic. For example, with `OPENAI_API_KEY` already set:
 
 ```sh
-vespasian examples/concise.jsonl \
+vespasian examples/concise.jsonl --task text-generation \
   --goal 'Return only the requested answer.' \
   --editor openai --editor-model gpt-6.1-sol --budget 2
 ```
 
 ### Inference budget
 
-`--budget` is measured in **USD for frontier inference**, including dataset assessment, edit proposals, semantic scoring and behavioural control checks. Local model execution is separate.
+`--budget` is measured in **USD for frontier inference**, including dataset assessment, edit proposals, semantic scoring and behavioural control checks. Both the terminal and Space default to **$10**, with no mandatory turn cap. Local model execution is separate.
 
-Codex and Claude runs use estimated spend checked between requests. API requests reserve a conservative input allowance and the maximum output cost before sending. Returned token usage settles that reservation. `--max-output-tokens` limits each API response. Requests with unknown usage keep their reservation.
+`--reasoning-effort low|medium|high` selects the frontier editor’s reasoning effort. Both interfaces default to **low**, not disabled reasoning. The setting is sent to the provider and recorded with each request. A provider or model that rejects it stops the request rather than silently substituting no reasoning.
+
+`--budget-policy auto` is the terminal default. Codex and Claude CLI logins report estimated spend checked between requests; a single request can exceed the remaining amount. The warning and run receipt state this limitation. Choose `--budget-policy strict --editor openai` (or `anthropic`) to require API reservation; strict mode rejects CLI-login providers before any work. The Space uses strict API reservation.
+
+API requests reserve a conservative input allowance and the maximum output cost before sending. Returned token usage settles that reservation. `--max-output-tokens` limits each API response. Requests with unknown usage keep their reservation. This is a local control based on recorded token prices, not a provider-enforced billing ceiling. Check current prices and provider account limits when the invoice amount must not exceed a fixed sum.
 
 Model-specific rates are recorded with each run. Current provider rates are listed by [OpenAI](https://developers.openai.com/api/docs/pricing) and [Anthropic](https://platform.claude.com/docs/en/about-claude/pricing). Supply `--input-price` and `--output-price` in USD per million tokens to override them or use another model. The run receipt records the applied rates.
 
@@ -347,26 +355,61 @@ Model-specific rates are recorded with each run. Current provider rates are list
 
 The editor examines generated answers and previous outcomes, proposes a bounded tensor operation, and receives the resulting measurements. Candidates start from the retained checkpoint. A better validation score wins. When reference loss is measured, lower loss breaks equal scores. Preservation scores stay within `--preserve-tolerance` of baseline, and preservation loss stays within a 25% increase. Rejected changes are restored exactly.
 
-The four operations act on selected MLP down-projection tensors:
+Both surfaces show the recorded loop: assess the current answers, inspect the loaded model and tokenizer, explain the proposed strategy and plan, apply the bounded patch, test it, then keep or revert it. Short public rationales and reflections reference measured outcomes rather than exposing private chain-of-thought. A stage is marked complete only after its result is recorded.
+
+The editor starts with a small capability list and measured score summaries. It can read a relevant strategy guide and uses paged tools to inspect targets, tokenizer rows, rollouts and prior outcomes as needed. Essential tools are briefly described up front; strategy guides are suggestions, not a whitelist. The full tensor manifest and all strategy guides are not inserted into its prompt. Tool reads are recorded, bounded and included in frontier spending.
+
+Eight operations are available when the loaded model and dataset support them:
 
 | Operation | Change |
 | --- | --- |
-| `activation_rank_one` | Builds low-rank directions from forward activations and reference-token output embeddings. |
+| `activation_rank_one` | Builds contrastive MLP directions from measured activations and target-minus-predicted output embeddings. |
+| `activation_preserve` | Projects contrastive MLP keys away from sampled preservation-key directions before applying a bounded edit. |
 | `low_rank` | Adds a reproducible, seeded low-rank direction. |
 | `noise` | Adds a reproducible, seeded full-rank direction. |
-| `scale` | Multiplies the selected tensor by a bounded factor. |
+| `scale` | Multiplies the selected MLP tensor by a bounded factor. |
+| `token_row_scale` | Scales one to 32 inspected, non-special rows of an input embedding or output table. |
+| `token_row_interpolate` | Moves selected token rows toward inspected source rows in the same table, with a per-row norm bound. |
+| `token_row_residual` | Adds a bounded direction measured from actual linear output-head inputs and reference-token probability residuals. |
 
-Each proposal names its tensors, operation, magnitude, rank, seed and rationale. The worker checks the proposal and measures the actual stored change. The reflective search loop takes inspiration from [GEPA](https://github.com/gepa-ai/gepa), applied here to model tensors.
+Token-row selectors come from the current tokenizer and non-test examples. Unsupported or ambiguous table layouts are excluded. Tied input/output tables are edited once, with their shared effect disclosed. Row edits preserve untouched rows, keep sparse rollback snapshots and measure the actual stored change, including dtype rounding. An interpolation may be reduced to satisfy the norm bound. MLP operations cannot target vocabulary tables. Residual row editing requires grounded edit-reference tokens and a supported linear output head. Preservation projection requires separate reference-bearing preservation examples; it reduces overlap with sampled keys, not all possible regressions. Both use forward passes without autograd or backpropagation.
+
+Exact ROME, MEMIT and stored-patch composition are explicitly unavailable, rather than being names for these heuristics. Forward-only exploration, contrastive alignment, preservation-aware editing and measured refinement are executable choices. The editor may stop without proposing a patch when the evidence does not justify another candidate.
+
+Each proposal names its strategy, application plan, tensors, operation, magnitude, rank and seed. It includes a brief rationale and reflection on previous measured results. The shared [strategy catalogue](docs/STRATEGIES.md) draws on inspected IWIBench traces and identifies where Vespasian’s supported operations differ from those experiments. The worker checks the proposal and measures the actual stored change. The reflective search loop takes inspiration from [GEPA](https://github.com/gepa-ai/gepa), applied here to model tensors.
 
 Exact match ignores case and whitespace differences. Token F1 measures whitespace-token overlap. Semantic scoring asks the frontier model to judge each answer against the goal and reference on a 0–1 scale. Identical evaluated answers reuse their recorded scores.
 
+### Terminal and Space parity
+
+The Space launches the same Rust controller and imports the same Python model engine as the terminal application. Agent briefing, strategy selection, available operations, scoring, selection, rollback and spend accounting share that implementation. The Space exposes its deployment resource limits in setup and review; these are not alternative editing rules.
+
+For a matched comparison, use the same source version, target model revision, dataset and splits, objective, frontier provider/model, reasoning effort, budget, generation settings and optional turn cap. Independent frontier responses and different hardware can produce different candidates or floating-point results. The parity tests compare identical proposals on the same local model and hardware, including every supported operation, allocation restoration, accept/rollback, tied and untied token tables, generated answers and checkpoint reload.
+
+## Compact patches and private backup
+
+Every candidate is saved as a replayable local patch before evaluation. The latest candidate and best retained patch have separate atomic pointers. Rejected or interrupted candidates never replace best. Sparse token edits store only selected rows; dense MLP edits store the changed tensors, not the entire model. Content-addressed blobs are reused. Exact stored values, base-file identity, tensor dtype/layout and tied aliases are verified on replay.
+
+Choose `--save-format patch` for a compact final bundle or `--save-format model` for a materialised full model (the default). Patch-only runs reload the pinned base, replay best and verify the resulting answers before reporting completion. To materialise a downloaded patch later:
+
+```sh
+vespasian materialize-patch patches.zip --output edited-model
+```
+
+Supply `--model /path/to/base` for a private local base that is not identified by a Hub ID. The base must match the recorded identity. No private dataset is needed for replay.
+
+Local/download is the default. To authorize automatic backup after measured rounds, select a named **private** repository and explicitly enable it in Space, or use `--patch-backup --patch-repo owner/private-patches` with a session HF token. `--patch-create` separately authorizes creation of a missing private repository. There is no implicit owner-token fallback, public fallback or automatic upload merely because an account is connected. Backups contain patch weights and base metadata, not private goals, prompts, datasets or editor transcripts. A failed or unverified backup stops automatic work while preserving local patches. Space local storage is temporary; download or explicitly back it up for retention.
+
+Measured examples are not a universal patch-size promise: two real Qwen single-row patches averaged 2,404 bytes in a representative BF16 replacement encoding, while one retained MLP tensor occupied 7.34 MB. The new journal adds identity/manifest overhead. Dense edits can be much larger than sparse row edits.
+
 ## Checkpoints and reports
 
-Every run creates a new directory under `runs/`, or at `--output`. The source checkpoint remains unchanged. The selected checkpoint is saved and loaded in a fresh worker to verify its generated answers and measurements.
+Every run creates a new directory under `runs/`, or at `--output`. The source checkpoint remains unchanged. The selected full checkpoint or best patch is loaded in a fresh worker to verify generated answers and measurements.
 
 | Artifact | Contents |
 | --- | --- |
-| `checkpoint/` | Complete saved model and tokenizer or processor. |
+| `checkpoint/` | Complete saved model and tokenizer or processor, when requested. |
+| `patches/`, `patches.zip` | Durable latest/best journal and portable exact-value patch bundle. |
 | `report.json` | Baseline, retained and final scores, search history and stop reason. |
 | `turn-*.json` | Proposed changes, measured tensor differences and rollouts. |
 | `budget.json` | Token usage, estimated spend, reservations and prices. |

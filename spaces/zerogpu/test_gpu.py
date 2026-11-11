@@ -88,6 +88,40 @@ class GPUStateTests(unittest.TestCase):
         self.assertTrue(torch.equal(tensors["current." + name], pending_weight))
         self.assert_template_unchanged()
 
+    def test_sparse_token_rows_survive_allocations_and_restore_exactly(self):
+        self.initialise()
+        inspection, _ = self.call("inspect", token_texts=["abcdefgh"])
+        name = inspection["token_tables"][0]["name"]
+        a, b, c = [row["id"] for row in inspection["token_candidates"][:3]]
+        def request(ids, sources=None):
+            return {"proposal": {"targets": [name], "operation": "token_row_interpolate" if sources else "token_row_scale",
+                "token_ids": ids, "source_token_ids": sources or [], "strength": 0.05,
+                "rank": 1, "seed": 0, "rationale": "Test inspected token rows"}}
+        self.call("edit", **request([a, b], [b, a]))
+        metadata, tensors = gpu._read_snapshot(self.state)
+        self.assertEqual(metadata["engine"]["row_pending_ids"], {name: [a, b]})
+        self.assertEqual(set(tensors), {"row.current." + name, "row.pending." + name})
+        self.assertEqual(tensors["row.current." + name].shape[0], 2)
+        retained = tensors["row.current." + name].clone()
+        with patch.object(gpu, "_gpu_dispatch", side_effect=AssertionError("Selection stays on CPU")):
+            self.call("accept")
+        self.call("edit", **request([a, c]))
+        with patch.object(gpu, "_gpu_dispatch", side_effect=AssertionError("Rollback stays on CPU")):
+            self.call("rollback")
+        metadata, tensors = gpu._read_snapshot(self.state)
+        self.assertEqual(metadata["engine"]["row_current_ids"], {name: sorted([a, b])})
+        self.assertTrue(torch.equal(tensors["row.current." + name], retained))
+        inspection2, _ = self.call("inspect", token_texts=["abcdefgh"])
+        self.assertEqual(inspection2["token_tables"], inspection["token_tables"])
+        destination = self.root / "row-export"
+        result, _ = self.call("save", path=str(destination))
+        self.assertEqual(result["changed_token_rows"], {name: sorted([a, b])})
+        restored = LlamaForCausalLM.from_pretrained(destination)
+        expected = self.original[name].clone()
+        expected[sorted([a, b])] = retained
+        self.assertTrue(torch.equal(restored.state_dict()[name], expected))
+        self.assert_template_unchanged()
+
     @unittest.skipUnless(torch.cuda.is_available() and torch.cuda.is_bf16_supported(), "CUDA BF16 is unavailable")
     def test_cuda_bfloat16_replacements_and_rollback_are_bit_exact(self):
         template = gpu.ModelTemplate(gpu.SUPPORTED_MODELS[0], self.revision, copy.deepcopy(self.fixture.model).to(dtype=torch.bfloat16), self.fixture.tokenizer)

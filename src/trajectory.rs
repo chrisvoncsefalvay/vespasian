@@ -32,6 +32,7 @@ const METADATA: &[&str] = &[
     "controls",
     "editor",
     "editor_model",
+    "reasoning_effort",
     "budget_usd",
     "seed",
     "metric",
@@ -43,6 +44,7 @@ const METADATA: &[&str] = &[
     "health_max_drop",
     "max_turns",
     "budget_mode",
+    "budget_policy",
 ];
 
 fn credential_key(key: &str) -> bool {
@@ -314,6 +316,27 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect()
+    }
+
+    #[test]
+    fn run_start_preserves_reasoning_and_optional_turn_cap() {
+        for max_turns in [Value::Null, json!(12)] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("trajectory.jsonl");
+            let _recorder = Recorder::new(
+                &path,
+                &json!({"reasoning_effort":"medium","max_turns":max_turns,"budget_usd":10.0}),
+                vec![],
+            )
+            .unwrap();
+            let rows = records(&path);
+            assert_eq!(rows[0]["payload"]["reasoning_effort"], "medium");
+            assert!(rows[0]["payload"]
+                .as_object()
+                .unwrap()
+                .contains_key("max_turns"));
+            assert_eq!(rows[0]["payload"]["max_turns"], max_turns);
+        }
     }
 
     #[test]

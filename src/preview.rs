@@ -8,6 +8,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+fn dataset_script() -> String {
+    format!("import sys,types\nm=types.ModuleType('task_metadata')\nexec({},m.__dict__)\nsys.modules['task_metadata']=m\nexec({})", serde_json::to_string(include_str!("../python/task_metadata.py")).expect("embedded task helper"), serde_json::to_string(include_str!("../python/dataset.py")).expect("embedded dataset helper"))
+}
+
 const OUTPUT_LIMIT: u64 = 1024 * 1024;
 const ERROR_LIMIT: u64 = 64 * 1024;
 
@@ -20,6 +24,8 @@ pub struct PreviewRequest {
     pub prompt_field: Option<String>,
     pub target_field: Option<String>,
     pub dataset_mode: String,
+    pub hf_task: Option<String>,
+    pub model_id: Option<String>,
     pub text_field: Option<String>,
 }
 
@@ -110,7 +116,7 @@ impl PreviewClient {
         command
             .arg("-u")
             .arg("-c")
-            .arg(include_str!("../python/dataset.py"))
+            .arg(dataset_script())
             .arg("--preview")
             .arg("--repo")
             .arg(request.repo)
@@ -127,6 +133,8 @@ impl PreviewClient {
             ("--prompt-field", request.prompt_field),
             ("--target-field", request.target_field),
             ("--text-field", request.text_field),
+            ("--task", request.hf_task),
+            ("--model-id", request.model_id),
         ] {
             if let Some(value) = value.filter(|v| !v.trim().is_empty()) {
                 command.arg(flag).arg(value);
@@ -416,6 +424,22 @@ mod tests {
     }
 
     #[test]
+    fn embedded_preview_bootstraps_shared_task_helper() {
+        let result = Command::new(crate::platform::test_python())
+            .args(["-c", &dataset_script(), "--help"])
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let help = String::from_utf8_lossy(&result.stdout);
+        assert!(help.contains("--task"));
+        assert!(help.contains("--model-id"));
+    }
+
+    #[test]
     #[cfg(unix)]
     fn token_reaches_only_the_child_environment() {
         use sha2::{Digest, Sha256};
@@ -443,6 +467,8 @@ mod tests {
                 prompt_field: Some("question".into()),
                 target_field: Some("answer".into()),
                 dataset_mode: "paired".into(),
+                hf_task: Some("text-generation".into()),
+                model_id: None,
                 text_field: None,
             })
             .unwrap();

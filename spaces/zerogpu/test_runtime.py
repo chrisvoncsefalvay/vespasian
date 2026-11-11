@@ -30,6 +30,52 @@ class RuntimeTests(unittest.TestCase):
             "max_turns": 2, "max_new_tokens": 16, "example_limit": 5,
         }
 
+    def test_optional_turn_cap_and_reasoning_reach_shared_controller(self):
+        binary = self.root / "bin/vespasian"
+        binary.parent.mkdir()
+        binary.write_text("fixture")
+        (self.root / "python_bridge.py").write_text("fixture")
+        for turns in (None, 1, 75, 4294967295):
+            for effort in ("low", "medium", "high"):
+                config = {**self.config, "budget": 10, "max_turns": turns, "reasoning_effort": effort}
+                runtime.validate(config)
+                with patch.object(runtime, "ROOT", self.root), patch.dict(os.environ, {"VESPASIAN_SPACE_BINARY": str(binary)}):
+                    args = runtime.command(config, "data.jsonl", "output", "revision")
+                self.assertEqual(args[args.index("--reasoning-effort") + 1], effort)
+                self.assertEqual(args[args.index("--budget") + 1], "10")
+                self.assertEqual(args[args.index("--budget-policy") + 1], "strict")
+                for flag, value in (("--seed", "42"), ("--max-seq-length", "1024"), ("--max-output-tokens", "2048"), ("--preserve-tolerance", "0")):
+                    self.assertEqual(args[args.index(flag) + 1], value)
+                if turns is None:
+                    self.assertNotIn("--max-turns", args)
+                else:
+                    self.assertEqual(args[args.index("--max-turns") + 1], str(turns))
+        for invalid in (0, -1, 1.5, True, float("nan"), float("inf"), 4294967296):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                runtime.validate({**self.config, "max_turns": invalid})
+        with self.assertRaisesRegex(ValueError, "reasoning"):
+            runtime.validate({**self.config, "reasoning_effort": "none"})
+
+
+    def test_task_output_prompt_and_private_backup_flags_are_explicit(self):
+        binary = self.root / "bin/vespasian"
+        binary.parent.mkdir()
+        binary.write_text("fixture")
+        (self.root / "python_bridge.py").write_text("fixture")
+        config = {**self.config, "hf_task": "text-generation", "save_format": "patch", "prompt_format": "plain", "patch_backup": True, "patch_repo": "visitor/patches", "patch_create": True}
+        with patch.object(runtime, "ROOT", self.root), patch.dict(os.environ, {"VESPASIAN_SPACE_BINARY": str(binary)}):
+            args = runtime.command(config, "data.jsonl", "output", "revision")
+            default = runtime.command(self.config, "data.jsonl", "output", "revision")
+        for flag, value in (("--task", "text-generation"), ("--save-format", "patch"), ("--prompt-format", "plain"), ("--patch-repo", "visitor/patches")):
+            self.assertEqual(args[args.index(flag) + 1], value)
+        self.assertIn("--patch-backup", args)
+        self.assertIn("--patch-create", args)
+        self.assertNotIn("--patch-backup", default)
+        with self.assertRaisesRegex(ValueError, "session token"):
+            runtime.begin("visitor", config, False)
+        with self.assertRaises(ValueError):
+            runtime.validate({**config, "patch_backup": "true"})
+
     def test_child_drops_owner_credentials_and_has_its_own_home(self):
         ambient = {
             "PATH": "/usr/bin", "LANG": "C.UTF-8", "HF_TOKEN": "owner-hf-token",

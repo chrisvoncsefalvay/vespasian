@@ -83,6 +83,8 @@ jobs:
       - name: Exercise model state without Hub downloads or GPU allocation
         run: |
           python -m unittest discover -s spaces/zerogpu -p 'test_gpu.py' -v
+          python -m unittest discover -s spaces/zerogpu -p 'test_model_registry.py' -v
+          python -m unittest discover -s spaces/zerogpu -p 'test_interface_parity.py' -v
           python -m unittest discover -s spaces/zerogpu -p 'test_app.py' -v
       - name: Build the Gradio app with real OAuth routes
         env:

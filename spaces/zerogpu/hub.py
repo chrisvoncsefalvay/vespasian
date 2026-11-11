@@ -17,8 +17,8 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent
 CORE = ROOT / "core" if (ROOT / "core").is_dir() else ROOT.parent.parent / "python"
-DATA_FIELDS = {"dataset_source", "dataset_config", "dataset_split", "dataset_mode", "prompt_field",
-               "target_field", "text_field", "example_limit", "test_dataset_source",
+DATA_FIELDS = {"model", "dataset_source", "dataset_config", "dataset_split", "dataset_mode", "prompt_field",
+               "target_field", "text_field", "hf_task", "example_limit", "test_dataset_source",
                "test_dataset_config", "test_dataset_split", "test_example_limit"}
 
 
@@ -31,6 +31,8 @@ def core_module(name):
     return module
 
 
+task_metadata = core_module("task_metadata")
+sys.modules["task_metadata"] = task_metadata
 dataset = core_module("dataset")
 
 
@@ -74,8 +76,23 @@ def account_datasets(token=False, api=None):
     return who["name"], sorted(choices, key=str.casefold)
 
 
-def search_dataset_results(query, token=False, limit=12, api=None):
+def model_task_metadata(model_id, token=False, api=None):
+    """Read task suggestions without treating tags as executable model support."""
+    if api is None:
+        from huggingface_hub import HfApi
+        api = HfApi(token=token or False)
+    try:
+        info = api.model_info(repo_id=model_id)
+    except Exception:
+        return {"model_pipeline_tag": None, "model_suggested_tasks": [],
+                "warning": "Model task metadata is unavailable; choose the task explicitly."}
+    result = task_metadata.assess_task(model_info=info)
+    return {key: result[key] for key in ("model_pipeline_tag", "model_suggested_tasks", "model_metadata_revision")}
+
+
+def search_dataset_results(query, token=False, limit=12, api=None, *, hf_task=None):
     """Search public datasets with the visitor's explicit authentication context."""
+    hf_task = task_metadata.normalize_task(hf_task)
     query = str(query or "").strip()[:120]
     if len(query) < 2:
         return []
@@ -85,7 +102,8 @@ def search_dataset_results(query, token=False, limit=12, api=None):
         from huggingface_hub import HfApi
         api = HfApi(token=token or False)
     try:
-        found = api.list_datasets(search=query, limit=limit, sort="downloads")
+        filters = {"task_categories": hf_task} if hf_task else {}
+        found = api.list_datasets(search=query, limit=limit, sort="downloads", **filters)
         results = []
         seen = set()
         for info in itertools.islice(found, limit):
@@ -101,9 +119,9 @@ def search_dataset_results(query, token=False, limit=12, api=None):
         raise ValueError("Could not search the Hub. Try again or enter a dataset repository directly") from None
 
 
-def search_datasets(query, token=False, limit=12, api=None):
+def search_datasets(query, token=False, limit=12, api=None, *, hf_task=None):
     return [(f"{item['id']} · {'Access request required' if item['gated'] else 'Public'}", item["id"])
-            for item in search_dataset_results(query, token, limit, api)]
+            for item in search_dataset_results(query, token, limit, api, hf_task=hf_task)]
 
 
 def _preview_local(config, token=False):
@@ -113,6 +131,8 @@ def _preview_local(config, token=False):
             config=config.get("dataset_config") or None,
             split=config.get("dataset_split") or "train",
             dataset_mode=config.get("dataset_mode", "paired"),
+            hf_task=config.get("hf_task") or None,
+            model_id=config.get("model") or None,
             prompt_field=config.get("prompt_field") or None,
             target_field=config.get("target_field") or None,
             text_field=config.get("text_field") or None,
@@ -175,6 +195,17 @@ def preview_html(result, role="Edit/validation"):
     mapped = result.get("mapped_rows", [])
     parts = [f'<section class="vs-data-preview" data-preview-role="{_display(role)}">']
     parts.append(f'<header><span class="vs-kicker">{_display(role)} data</span><strong>{_display(result.get("repo", "Dataset"))}</strong><span>{_display(result.get("config") or "default")} · {_display(result.get("split", ""))} · {_display(str(result.get("revision", ""))[:8])}</span></header>')
+    task = result.get("task_metadata") or {}
+    if task:
+        selected = task.get("selected_task")
+        label = f"Task: {selected}" if selected else "Task selection required: choose a text task in setup."
+        if task.get("selection_source") == "dataset_metadata":
+            label += " · suggested by dataset metadata"
+        parts.append(f'<p class="vs-preview-note">{_display(label)}</p>')
+        if task.get("model_pipeline_tag"):
+            parts.append(f'<p class="vs-preview-note">Model task tag: {_display(str(task["model_pipeline_tag"])[:100])}. Editing uses text generation; tags do not guarantee model support.</p>')
+        if task.get("warning") or task.get("error"):
+            parts.append(f'<p class="vs-preview-note">{_display(str(task.get("error") or task["warning"])[:500])}</p>')
     if result.get("mapping_error") or result.get("error"):
         parts.append(f'<p class="vs-preview-note">{_display(result.get("mapping_error") or result["error"])}</p>')
     for index, row in enumerate(rows[:3]):
@@ -213,6 +244,8 @@ def _fetch_local(config, directory: Path, token=False, *, test=False):
             output=directory / f"{name}.jsonl", receipt=directory / f"{name}-source.json",
             limit=int(config.get("test_example_limit" if test else "example_limit", 16)),
             dataset_mode=config.get("dataset_mode", "paired"),
+            hf_task=config.get("hf_task") or None,
+            model_id=config.get("model") or None,
             prompt_field=config.get("prompt_field") or None,
             target_field=config.get("target_field") or None,
             text_field=config.get("text_field") or None, **runtime,
@@ -288,7 +321,8 @@ def _map_upload_records(raw, config):
     for row in raw:
         fields = dataset.resolve_mode_fields(row, mode, config.get("prompt_field") or None,
                                              config.get("target_field") or None, config.get("text_field") or None)
-        for item in dataset.mapped_examples(row, fields, mode):
+        prepared = dataset.prepare_task_row(row, fields, mode, config.get("hf_task") or None)
+        for item in dataset.mapped_examples(prepared, fields, mode):
             canonical = {"prompt": item["prompt"], "target": item["target"]}
             if mode != "paired":
                 canonical["mode"] = mode
@@ -309,7 +343,7 @@ def preview_upload(path: str, config):
     raw = _upload_records(path, int(config.get("example_limit", 16)))
     mode = config.get("dataset_mode", "paired")
     result = {"repo": Path(path).name, "config": None, "configs": [], "split": "uploaded records", "splits": [],
-              "dataset_mode": mode, "rows": raw[:3], "mapped_rows": [], "error": None, "mapping_error": None,
+              "dataset_mode": mode, "task_metadata": task_metadata.assess_task(selected_task=config.get("hf_task") or None), "rows": raw[:3], "mapped_rows": [], "error": None, "mapping_error": None,
               "prompt_field": config.get("prompt_field") or None, "target_field": config.get("target_field") or None,
               "text_field": config.get("text_field") or None}
     if not raw:
@@ -330,7 +364,8 @@ def preview_upload(path: str, config):
             if mode == "paired":
                 result["target_field"] = fields[1]
         for index, row in enumerate(raw[:3]):
-            for mapped in dataset.mapped_examples(row, fields, mode):
+            prepared = dataset.prepare_task_row(row, fields, mode, config.get("hf_task") or None)
+            for mapped in dataset.mapped_examples(prepared, fields, mode):
                 result["mapped_rows"].append({"row_index": index, **mapped})
                 if len(result["mapped_rows"]) >= 20:
                     return result
@@ -364,8 +399,10 @@ def assign_splits(rows, test_rows=()):
 
 def prepare_data(config, directory: Path, token=False):
     if config.get("dataset_location") in {"file", "upload"} or (config.get("dataset_file") and not config.get("dataset_source")):
+        task = task_metadata.assess_task(selected_task=config.get("hf_task") or None)
+        selected_task = task_metadata.require_task(task)
         rows = read_upload(config["dataset_file"], config)
-        source = {"source": "upload", "rows": len(rows)}
+        source = {"source": "upload", "rows": len(rows), "hf_task": selected_task, "task_metadata": task}
         (directory / "training-source.json").write_text(json.dumps(source, indent=2))
     else:
         fetch_source(config, directory, token)
