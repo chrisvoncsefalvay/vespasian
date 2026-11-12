@@ -165,6 +165,7 @@
   // The Hub sandbox permits popups but forbids top navigation. Keep Gradio's
   // own OAuth routes and state
   // validation; neither credentials nor session cookies are handled here.
+  let lastLoginStarted = -Infinity
   document.addEventListener('click', event => {
     if (window.self === window.top || !event.target.closest('#vs-login')) return
     const login = nativeLogin()
@@ -172,6 +173,10 @@
     if (!login || login.disabled || isSignedIn(login)) return
     event.preventDefault()
     event.stopImmediatePropagation()
+    // Suppress double taps without retaining a cross-origin popup handle.
+    // A short pause still lets users retry after closing or blocking a tab.
+    if (performance.now() - lastLoginStarted < 1500) return
+    lastLoginStarted = performance.now()
     const target = new URL('login/huggingface', window.location.origin + '/')
     const returnTo = new URL(window.location.href)
     try {

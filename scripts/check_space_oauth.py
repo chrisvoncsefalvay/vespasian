@@ -62,7 +62,7 @@ class Provider:
         return RedirectResponse(str(redirect_uri))
 
     async def authorize_access_token(self, request):
-        if request.session.pop("fixture_state", None) != "test":
+        if request.cookies.get("fixture_mismatch") == "1" or request.session.pop("fixture_state", None) != "test":
             raise MismatchingStateError()
         return {
             "access_token": "fixture-only-not-a-credential",
@@ -94,6 +94,7 @@ with patch("authlib.integrations.starlette_client.OAuth", OAuthFixture):
     app.gr.set_static_paths(paths=[app.ASSET_DIR])
     demo = app.demo
     demo.queue(max_size=16, default_concurrency_limit=4).launch(
+        app_kwargs=app.oauth_guard.app_kwargs(),
         css=app.CSS, theme=app.THEME, js=app.JS, show_error=True,
         server_name="127.0.0.1", server_port=int(sys.argv[1]),
         allowed_paths=[str(app.ASSET_DIR)], ssl_certfile=sys.argv[2],
@@ -211,11 +212,18 @@ def exercise_browsers(origin, wrapper, config):
                             with context.expect_page() as popup:
                                 start_login()
                             expect(frame.locator("#vs-login-help")).to_contain_text("standalone tab")
+                            # A rapid repeated tap must not start a second login tab.
+                            pages_before = len(context.pages)
+                            frame.locator("#vs-login").evaluate("el => el.click()")
+                            page.wait_for_timeout(200)
+                            assert len(context.pages) == pages_before
                             assert page.url == wrapper + "/"
                             if interrupted:
                                 expect(popup.value.locator("h1")).to_have_text("Sign-in paused")
                                 popup.value.close()
                                 expect(frame.locator("#vs-login")).to_have_text("Sign in with Hugging Face")
+                                # The deliberate retry follows the double-tap pause.
+                                page.wait_for_timeout(1500)
                                 with context.expect_page() as popup:
                                     frame.locator("#vs-login").click()
                             page = popup.value
@@ -267,6 +275,34 @@ def exercise_browsers(origin, wrapper, config):
                         expect(page.locator("#vs-login")).to_have_text(
                             "Sign in with Hugging Face", timeout=30000,
                         )
+                        if not embedded and not guide:
+                            await_starts = []
+                            context.on("request", lambda request: await_starts.append(request.url)
+                                       if urlparse(request.url).path == "/login/huggingface" else None)
+                            context.add_cookies([{
+                                "name": "fixture_mismatch", "value": "1", "url": origin,
+                                "secure": True, "sameSite": "None",
+                            }])
+                            page.goto(origin + "/login/huggingface")
+                            expect(page.locator("h1")).to_have_text("Sign-in could not finish")
+                            assert len(await_starts) == 3  # third request is stopped before OAuth
+                            page.reload(wait_until="domcontentloaded")
+                            expect(page.locator("h1")).to_have_text("Sign-in could not finish")
+                            assert len(await_starts) == 4
+                            # Dismissal/new-tab recovery never automatically starts OAuth.
+                            with context.expect_page() as recovered:
+                                page.get_by_role("link", name="Open standalone workbench").click()
+                            recovery = recovered.value
+                            expect(recovery.locator("#vs-login")).to_have_text("Sign in with Hugging Face")
+                            assert len(await_starts) == 4
+                            page.go_back(wait_until="domcontentloaded")
+                            assert len(await_starts) == 4
+                            context.clear_cookies(name="fixture_mismatch")
+                            if recovery.locator("#vs-guide[open]").count():
+                                recovery.locator(".vs-guide-top [data-guide-close]").click()
+                            recovery.locator("#vs-login").click()
+                            expect(recovery.locator("#vs-login")).to_contain_text("Logout (fixture-user)")
+                            recovery.close()
                         assert not errors, errors
                         assert not forbidden, forbidden
                         receipts.append({
@@ -274,6 +310,8 @@ def exercise_browsers(origin, wrapper, config):
                             "entry": "guide" if guide else "account",
                             "cancelled_popup_retry": "passed" if interrupted else "not applicable",
                             "blocked_popup_fallback": "passed" if blocked_popup else "not applicable",
+                            "rapid_repeat_suppressed": "passed" if embedded and not blocked_popup else "not applicable",
+                            "state_failure_recovery": "passed" if not embedded and not guide else "not applicable",
                             "login": "passed", "connected_profile": "passed",
                             "delayed_guide_status": "passed",
                             "continue_without_logout": "passed", "logout": "passed",

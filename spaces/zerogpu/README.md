@@ -54,6 +54,11 @@ workbench in a new tab. Continue there to keep your session, including in Safari
 The embedded view can still show a sign-in button because its browser cookies
 are separate. You do not need to disable cross-site tracking protection.
 
+If the browser cannot preserve the sign-in session, automatic login retries
+stop with a recovery page. Close other sign-in tabs and open the standalone
+workbench from that page before trying again. If Hugging Face reports too many
+attempts, wait rather than repeatedly signing in.
+
 
 1. **Choose the target model.** Select the small model to edit. The frontier
    editor is a separate model selected in Runtime.

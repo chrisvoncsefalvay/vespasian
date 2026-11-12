@@ -14,6 +14,7 @@ os.environ.setdefault("GRADIO_ANALYTICS_ENABLED", "False")
 import gradio as gr
 
 import hub
+import oauth_guard
 import runtime
 import setup_helpers as setup
 from gpu import dispatch, model_availability, model_options
@@ -479,6 +480,7 @@ if __name__ == "__main__":
     runtime.start_cleanup()
     gr.set_static_paths(paths=[ASSET_DIR])
     demo.queue(max_size=16, default_concurrency_limit=4).launch(
+        app_kwargs=oauth_guard.app_kwargs(),
         css=CSS, theme=THEME, js=JS, show_error=False, max_file_size="20mb",
         server_name=os.environ.get("GRADIO_SERVER_NAME", "0.0.0.0"),
         server_port=int(os.environ.get("PORT", "7860")), allowed_paths=[str(ASSET_DIR), str(setup.EXAMPLES)],
