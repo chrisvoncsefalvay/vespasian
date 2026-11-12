@@ -177,6 +177,10 @@ pub struct WizardOptions {
     pub budget_policy: String,
     pub max_turns: Option<u32>,
     pub reasoning_effort: String,
+    pub thinking_mode: String,
+    pub max_new_tokens: usize,
+    pub max_seq_length: usize,
+    pub max_relative_norm: f64,
     pub controls: String,
     pub hf_token: Option<String>,
     pub publish_repo: Option<String>,
@@ -215,6 +219,10 @@ impl Default for WizardOptions {
             budget_policy: "auto".into(),
             max_turns: None,
             reasoning_effort: "low".into(),
+            thinking_mode: "off".into(),
+            max_new_tokens: 128,
+            max_seq_length: 1024,
+            max_relative_norm: 0.1,
             controls: String::new(),
             hf_token: None,
             publish_repo: None,
@@ -246,6 +254,10 @@ pub struct WizardResult {
     pub budget_policy: String,
     pub max_turns: Option<u32>,
     pub reasoning_effort: String,
+    pub thinking_mode: String,
+    pub max_new_tokens: usize,
+    pub max_seq_length: usize,
+    pub max_relative_norm: f64,
     pub editor: String,
     pub editor_model: Option<String>,
     pub prompt_field: String,
@@ -401,6 +413,11 @@ struct Form {
     budget_policy: Input,
     max_turns: Input,
     reasoning_effort: Input,
+    thinking_mode: Input,
+    max_new_tokens: Input,
+    max_seq_length: Input,
+    max_relative_norm: Input,
+    advanced_runtime: bool,
     editor_model: Input,
     prompt_field: Input,
     target_field: Input,
@@ -455,6 +472,11 @@ impl Default for Form {
             budget_policy: Input::new("auto"),
             max_turns: Input::default(),
             reasoning_effort: Input::new("low"),
+            thinking_mode: Input::new("off"),
+            max_new_tokens: Input::new("128"),
+            max_seq_length: Input::new("1024"),
+            max_relative_norm: Input::new("0.1"),
+            advanced_runtime: false,
             editor_model: Input::default(),
             prompt_field: Input::default(),
             target_field: Input::default(),
@@ -580,6 +602,18 @@ impl Form {
             budget_policy: Input::new(&options.budget_policy),
             max_turns: Input::new(&options.max_turns.map(|v| v.to_string()).unwrap_or_default()),
             reasoning_effort: Input::new(&options.reasoning_effort),
+            thinking_mode: Input::new(&options.thinking_mode),
+            max_new_tokens: Input::new(&options.max_new_tokens.to_string()),
+            max_seq_length: Input::new(&options.max_seq_length.to_string()),
+            max_relative_norm: Input::new(&options.max_relative_norm.to_string()),
+            advanced_runtime: options.reasoning_effort != "low"
+                || options.thinking_mode != "off"
+                || options.max_new_tokens != 128
+                || options.max_seq_length != 1024
+                || options.max_relative_norm != 0.1
+                || options.max_turns.is_some()
+                || options.budget_policy != "auto"
+                || options.prompt_format != "auto",
             controls: Input::new(&options.controls),
             hf_token: Input::new(options.hf_token.as_deref().unwrap_or("")),
             publish: usize::from(options.publish_repo.is_some()),
@@ -925,6 +959,10 @@ impl Form {
                 3 => Some(&mut self.max_turns),
                 4 => Some(&mut self.budget_policy),
                 5 => Some(&mut self.prompt_format),
+                6 => Some(&mut self.thinking_mode),
+                7 => Some(&mut self.max_new_tokens),
+                8 => Some(&mut self.max_seq_length),
+                9 => Some(&mut self.max_relative_norm),
                 _ => Some(&mut self.budget),
             },
             8 if self.publish == 1 && self.typing => match self.field {
@@ -1026,6 +1064,11 @@ impl Form {
                 }
                 Ok(())
             }
+            7 if !["off", "on", "auto"].contains(&self.thinking_mode.text.trim()) => Err("Choose target thinking off, on or auto.".into()),
+            7 if self.thinking_mode.text.trim() == "on" && self.prompt_format.text.trim() == "plain" => Err("Target thinking on requires a compatible chat template, not plain prompts.".into()),
+            7 if !self.max_new_tokens.text.trim().parse::<usize>().is_ok_and(|v| (1..=32768).contains(&v)) => Err("Generated tokens must be a whole number from 1 to 32768.".into()),
+            7 if !self.max_seq_length.text.trim().parse::<usize>().is_ok_and(|v| (32..=131072).contains(&v)) => Err("Sequence tokens must be a whole number from 32 to 131072.".into()),
+            7 if !self.max_relative_norm.text.trim().parse::<f64>().is_ok_and(|v| v.is_finite() && (0.000001..=1.0).contains(&v)) => Err("Direction-edit relative norm cap must be between 0.000001 and 1.".into()),
             7 if !["auto", "chat", "plain"].contains(&self.prompt_format.text.trim()) => Err("Choose prompt format auto, chat or plain.".into()),
             8 if self.save_format.text == "patch" && self.publish == 1 => Err("Patch-only output stays local. Choose full model output before model repository publication.".into()),
             7 if !["auto", "strict"].contains(&self.budget_policy.text.trim()) => Err("Choose budget policy auto or strict.".into()),
@@ -1115,6 +1158,10 @@ impl Form {
             budget_policy: self.budget_policy.text.trim().into(),
             max_turns: self.max_turns.text.trim().parse().ok(),
             reasoning_effort: self.reasoning_effort.text.trim().into(),
+            thinking_mode: self.thinking_mode.text.trim().into(),
+            max_new_tokens: self.max_new_tokens.text.trim().parse().unwrap_or(128),
+            max_seq_length: self.max_seq_length.text.trim().parse().unwrap_or(1024),
+            max_relative_norm: self.max_relative_norm.text.trim().parse().unwrap_or(0.1),
             editor: EDITORS[self.editor].0.into(),
             editor_model: if self.editor_model.text.trim().is_empty() {
                 None
@@ -1191,6 +1238,10 @@ impl Form {
         let previous_editor = self.editor;
         let previous_editor_default = self.default_editor_model();
         match key.code {
+            KeyCode::F(2) if self.step == 7 => {
+                self.advanced_runtime = !self.advanced_runtime;
+                self.field = if self.advanced_runtime { 2 } else { 0 };
+            }
             KeyCode::F(2) if self.step == 8 => {
                 self.save_format = Input::new(if self.save_format.text == "model" {
                     "patch"
@@ -1295,6 +1346,19 @@ impl Form {
                     self.custom_target_type = None;
                 }
             }
+            KeyCode::Up | KeyCode::Down if self.step == 7 && self.field == 6 => {
+                let choices = ["off", "on", "auto"];
+                let current = choices
+                    .iter()
+                    .position(|v| *v == self.thinking_mode.text)
+                    .unwrap_or(0);
+                let next = if key.code == KeyCode::Up {
+                    (current + 2) % 3
+                } else {
+                    (current + 1) % 3
+                };
+                self.thinking_mode = Input::new(choices[next]);
+            }
             KeyCode::Up | KeyCode::Down if self.step == 7 && self.field == 5 => {
                 let choices = ["auto", "chat", "plain"];
                 let current = choices
@@ -1386,10 +1450,11 @@ impl Form {
                         (self.field + 1) % 3
                     };
                 } else if self.step == 7 {
+                    let count = if self.advanced_runtime { 10 } else { 2 };
                     self.field = if key.code == KeyCode::BackTab {
-                        (self.field + 5) % 6
+                        (self.field + count - 1) % count
                     } else {
-                        (self.field + 1) % 6
+                        (self.field + 1) % count
                     };
                 } else if self.step == 3 {
                     self.field = (self.field + 1) % 2;
@@ -1672,7 +1737,7 @@ fn render(frame: &mut Frame, form: &Form) {
     } else if form.step == 5 {
         "Space select · Tab count/limit · Enter continue"
     } else if form.step == 7 {
-        "Tab fields · ↑ ↓ models · type ID · Enter continue"
+        "F2 Advanced · Tab fields · ↑ ↓ choices · Enter continue"
     } else if matches!(form.step, 8 | 9) && form.typing {
         "Tab fields · ↑ ↓ toggle choices · Enter continue"
     } else if matches!(form.step, 2 | 3) {
@@ -1916,7 +1981,11 @@ fn render_step(frame: &mut Frame, area: Rect, form: &Form) {
                     &form.editor_model,
                     form.default_editor_model(),
                 ),
-                ("Reasoning effort · ↑/↓", &form.reasoning_effort, "low"),
+                (
+                    "Editor reasoning effort · ↑/↓",
+                    &form.reasoning_effort,
+                    "low",
+                ),
                 ("Turn cap · optional", &form.max_turns, "No turn cap"),
                 ("Budget policy · ↑/↓", &form.budget_policy, "auto"),
                 (
@@ -1924,9 +1993,22 @@ fn render_step(frame: &mut Frame, area: Rect, form: &Form) {
                     &form.prompt_format,
                     "auto; plain for a model without a chat template",
                 ),
+                ("Target thinking · ↑/↓", &form.thinking_mode, "off"),
+                ("Generated token limit", &form.max_new_tokens, "128"),
+                ("Sequence token limit", &form.max_seq_length, "1024"),
+                (
+                    "Direction-edit relative norm cap",
+                    &form.max_relative_norm,
+                    "0.1",
+                ),
             ];
-            let visible = ((area.height.saturating_sub(2) / 3) as usize).clamp(1, 6);
-            let first = form.field.saturating_sub(visible - 1).min(6 - visible);
+            let count = if form.advanced_runtime {
+                fields.len()
+            } else {
+                2
+            };
+            let visible = ((area.height.saturating_sub(2) / 3) as usize).clamp(1, count);
+            let first = form.field.saturating_sub(visible - 1).min(count - visible);
             let mut constraints = vec![Constraint::Length(3); visible];
             constraints.push(Constraint::Min(0));
             let sections = Layout::vertical(constraints).split(area);
@@ -1941,15 +2023,24 @@ fn render_step(frame: &mut Frame, area: Rect, form: &Form) {
                     hint,
                 );
             }
-            let explanation = if form.editor < 2 {
-                "Auto: estimated between calls, not a hard cap. Strict requires an API editor."
-            } else {
-                "Requests reserve cost at configured rates before inference. GPU costs are separate."
+            let explanation = match form.field {
+                6 => "Target thinking is separate from editor reasoning. Off preserves starter baselines; on needs a compatible chat template; auto uses its default.",
+                7 | 8 => "Generated tokens include thinking. Capped output may be truncated. Large limits need sufficient model context, memory and runtime.",
+                9 => "Reviewed cap: 0.000001 <= cap <= 1, default 0.1. Bounds the new direction edit; existing edit safeguards remain.",
+                _ if form.editor < 2 => "Auto: estimated between calls, not a hard cap. Strict requires an API editor.",
+                _ => "Requests reserve cost at configured rates before inference. GPU costs are separate.",
             };
             frame.render_widget(
-                Paragraph::new(format!("Tab changes settings. A blank turn cap leaves spending as the limit. {explanation}"))
-                    .style(Style::default().fg(MUTED))
-                    .wrap(Wrap { trim: true }),
+                Paragraph::new(format!(
+                    "F2 {} Advanced. No default turn cap. {explanation}",
+                    if form.advanced_runtime {
+                        "closes"
+                    } else {
+                        "opens"
+                    }
+                ))
+                .style(Style::default().fg(MUTED))
+                .wrap(Wrap { trim: true }),
                 sections[visible],
             );
         }
@@ -2864,7 +2955,7 @@ fn render_review(frame: &mut Frame, area: Rect, form: &Form) {
             ),
         ),
         review_line("Budget", &format!("${:.2} USD", result.budget)),
-        review_line("Reasoning effort", &result.reasoning_effort),
+        review_line("Editor reasoning", &result.reasoning_effort),
         review_line(
             "Budget policy",
             &format!(
@@ -2894,6 +2985,12 @@ fn render_review(frame: &mut Frame, area: Rect, form: &Form) {
             },
         ),
     ];
+    lines.extend([
+        review_line("Target thinking", &result.thinking_mode),
+        review_line("Generated tokens", &result.max_new_tokens.to_string()),
+        review_line("Sequence tokens", &result.max_seq_length.to_string()),
+        review_line("Direction norm cap", &result.max_relative_norm.to_string()),
+    ]);
     if let Some(category) = &form.custom_target_type {
         lines.insert(0, review_line("Category", &clean(category)));
     }
@@ -3643,7 +3740,7 @@ mod tests {
                     [
                         "Budget · USD",
                         "Frontier model",
-                        "Reasoning effort",
+                        "Editor reasoning effort",
                         "Turn cap",
                         "Budget policy"
                     ][field]
@@ -3659,6 +3756,107 @@ mod tests {
         form.field = 2;
         form.key(key(KeyCode::Down));
         assert_eq!(form.reasoning_effort.text, "low");
+    }
+
+    #[test]
+    fn inspection_settings_round_trip_and_advanced_navigation_preserve_values() {
+        let options = WizardOptions {
+            thinking_mode: "on".into(),
+            max_new_tokens: 32768,
+            max_seq_length: 131072,
+            max_relative_norm: 0.75,
+            ..Default::default()
+        };
+        let mut form = Form::from_options(&options);
+        form.step = 7;
+        form.editor_model = Input::new("gpt-6.1-sol");
+        assert!(form.advanced_runtime);
+        assert!(form.validate().is_ok());
+        let result = form.result();
+        assert_eq!(result.thinking_mode, "on");
+        assert_eq!(result.max_new_tokens, 32768);
+        assert_eq!(result.max_seq_length, 131072);
+        assert_eq!(result.max_relative_norm, 0.75);
+        for (field, label) in [
+            (6, "Target thinking"),
+            (7, "Generated token limit"),
+            (8, "Sequence token limit"),
+            (9, "Direction-edit relative norm cap"),
+        ] {
+            form.field = field;
+            for (width, height) in [(60, 18), (100, 32)] {
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                terminal.draw(|frame| render(frame, &form)).unwrap();
+                let text: String = terminal
+                    .backend()
+                    .buffer()
+                    .content
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect();
+                assert!(text.contains(label), "missing {label} at {width}x{height}");
+            }
+        }
+        form.key(key(KeyCode::Tab));
+        assert_eq!(form.field, 0);
+        form.key(key(KeyCode::BackTab));
+        assert_eq!(form.field, 9);
+        form.key(key(KeyCode::F(2)));
+        assert!(!form.advanced_runtime);
+        assert_eq!(form.field, 0);
+        form.key(key(KeyCode::Tab));
+        form.key(key(KeyCode::Tab));
+        assert_eq!(form.field, 0);
+        assert_eq!(form.result().max_new_tokens, 32768);
+        form.key(key(KeyCode::F(2)));
+        assert!(form.advanced_runtime);
+        assert_eq!(form.field, 2);
+        form.field = 6;
+        form.key(key(KeyCode::Down));
+        assert_eq!(form.result().thinking_mode, "auto");
+        assert_eq!(form.result().reasoning_effort, "low");
+    }
+
+    #[test]
+    fn inspection_limits_are_validated_and_baseline_defaults_stay_explicit() {
+        let mut form = Form {
+            step: 7,
+            editor_model: Input::new("gpt-6.1-sol"),
+            ..Default::default()
+        };
+        assert!(!form.advanced_runtime);
+        assert_eq!(form.result().thinking_mode, "off");
+        assert_eq!(form.result().max_new_tokens, 128);
+        assert_eq!(form.result().max_seq_length, 1024);
+        assert_eq!(form.result().max_relative_norm, 0.1);
+        assert_eq!(form.result().max_turns, None);
+        assert_eq!(form.result().budget, 10.0);
+        for value in ["0", "32769", "1.5", "-1"] {
+            form.max_new_tokens = Input::new(value);
+            assert!(form.validate().is_err());
+        }
+        form.max_new_tokens = Input::new("32768");
+        for value in ["31", "131073", "32.5", "NaN"] {
+            form.max_seq_length = Input::new(value);
+            assert!(form.validate().is_err());
+        }
+        form.max_seq_length = Input::new("131072");
+        for value in ["0", "0.0000001", "1.01", "NaN", "inf"] {
+            form.max_relative_norm = Input::new(value);
+            assert!(form.validate().is_err());
+        }
+        form.max_relative_norm = Input::new("0.000001");
+        assert!(form.validate().is_ok());
+        form.thinking_mode = Input::new("none");
+        assert!(form.validate().is_err());
+        form.thinking_mode = Input::new("on");
+        form.prompt_format = Input::new("plain");
+        assert!(form
+            .validate()
+            .unwrap_err()
+            .contains("compatible chat template"));
+        form.thinking_mode = Input::new("off");
+        assert!(form.validate().is_ok());
     }
 
     #[test]

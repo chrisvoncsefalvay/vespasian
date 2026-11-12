@@ -2,6 +2,8 @@
 
 from pathlib import Path
 import re
+import os
+from unittest.mock import patch
 import unittest
 
 import hub
@@ -30,6 +32,29 @@ class SetupTests(unittest.TestCase):
     def config(self):
         return {**setup.preset_config("greetings"), "editor": "openai", "editor_model": "gpt-6.1-sol",
                 "api_key": "editor-secret", "hf_token": "hub-secret"}
+
+    def test_inspection_defaults_review_and_shared_deployment_caps(self):
+        for name in setup.PRESETS:
+            config = setup.preset_config(name)
+            self.assertEqual(config["thinking_mode"], "off")
+            self.assertEqual(config["max_seq_length"], 1024)
+            self.assertEqual(config["max_relative_norm"], 0.1)
+        config = {**self.config(), "thinking_mode": "on", "max_new_tokens": 32768,
+                  "max_seq_length": 131072, "max_relative_norm": 1}
+        with patch.dict(os.environ, {}, clear=True):
+            errors = setup.validate_step(config, "run")
+            self.assertIn("max_new_tokens", errors)
+            self.assertIn("max_seq_length", errors)
+        with patch.dict(os.environ, {"VESPASIAN_SPACE_MAX_NEW_TOKENS": "32768", "VESPASIAN_SPACE_MAX_SEQ_LENGTH": "131072"}):
+            self.assertEqual(setup.validate_step(config, "run"), {})
+        review = setup.review_html(config)
+        for value in ("Target thinking", ">on<", "32768", "131072", "Direction-edit relative norm cap", "truncated"):
+            self.assertIn(value, review)
+        for field, values in (("thinking_mode", ("none", True)),
+                              ("max_relative_norm", (0, 0.0000001, 1.1, float("nan"), float("inf"), True))):
+            for value in values:
+                self.assertIn(field, setup.validate_step({**self.config(), field: value}, "run"))
+        self.assertIn("thinking_mode", setup.validate_step({**self.config(), "thinking_mode": "on", "prompt_format": "plain"}, "run"))
 
     def test_tracking_discards_a_stale_numeric_limit(self):
         config = {"health_policy": "track", "health_limit_pp": 0, "health_max_drop": .2}
@@ -152,27 +177,37 @@ class SetupTests(unittest.TestCase):
         config.update(health_limit_pp="", input_price="invalid")
         self.assertIn("Choose a valid preservation limit", setup.review_html(config))
 
-    def test_custom_editor_requires_both_prices(self):
+    def test_strict_space_rejects_custom_models_and_price_overrides(self):
         config = self.config()
         config["editor_model"] = "custom-editor"
-        self.assertEqual(set(setup.validate_step(config, "run")), {"input_price", "output_price"})
+        errors = setup.validate_step(config, "run")
+        self.assertEqual(set(errors), {"editor_model"})
+        self.assertIn("--budget-policy auto", errors["editor_model"])
         config.update(input_price="1.25", output_price="6")
-        self.assertEqual(setup.validate_step(config, "run"), {})
+        self.assertEqual(set(setup.validate_step(config, "run")), {"editor_model", "input_price", "output_price"})
+        # Normalisation may preserve imported prices, but validation must reject them.
         normal = setup.normalise_config(config)
         self.assertEqual((normal["input_price"], normal["output_price"]), (1.25, 6.))
+        self.assertIn("input_price", setup.validate_step(normal, "editor"))
         for bad in ("no", "nan", "inf", 0, -1):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 setup.normalise_config({"input_price": bad})
-        self.assertIsNone(setup.normalise_config({"input_price": " "})["input_price"])
         config.update(editor_model="gpt-6.1-sol", input_price=" ", output_price="")
         self.assertEqual(setup.validate_step(config, "editor"), {})
+        for value in (2, "2", 0, False, "no", float("nan")):
+            for field in ("input_price", "output_price"):
+                self.assertIn(field, setup.validate_step({**config, field: value}, "editor"))
+        for provider, models in setup.EDITOR_RATES.items():
+            for model in models:
+                self.assertEqual(setup.validate_step({**config, "editor": provider, "editor_model": model}, "run"), {})
+        self.assertIn("editor_model", setup.validate_step({**config, "editor": "anthropic", "editor_model": "gpt-6.1-sol"}, "run"))
 
     def test_budget_rates_match_controller_and_provider_choices(self):
         source = ROOT / "src/budget.rs"
         if not source.is_file():
             self.skipTest("Controller source is not in this bundle")
         rates = {model: (float(incoming), float(outgoing)) for model, incoming, outgoing in
-                 re.findall(r'"([^"]+)" => \(([\d.]+), ([\d.]+)\)', source.read_text())}
+                 re.findall(r'"([^"]+)" => \(([\d.]+), ([\d.]+)(?:, [\d.]+)?\)', source.read_text())}
         for provider, models in setup.EDITOR_RATES.items():
             self.assertEqual([value for _, value in setup.editor_choices(provider)], list(models))
             for model, expected in models.items():

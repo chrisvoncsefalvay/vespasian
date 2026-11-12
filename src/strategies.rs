@@ -55,6 +55,7 @@ pub fn catalogue(dataset_mode: &str, allowed_operations: &Value, inspection: &Va
                     | "noise"
                     | "activation_rank_one"
                     | "activation_preserve"
+                    | "direction_projection"
                     | "token_row_residual"
                     | "token_row_scale"
                     | "token_row_interpolate"
@@ -80,6 +81,13 @@ pub fn catalogue(dataset_mode: &str, allowed_operations: &Value, inspection: &Va
         })
         .collect();
     let mut cards = Vec::new();
+    if allowed.contains(&"direction_projection") {
+        cards.push(json!({"id":"measured_direction","operations":["direction_projection"],
+            "when_to_use":"Observed non-test failures suggest an activation direction shared by unproductive outputs, such as repeated or truncated generations, with productive contrasts available.",
+            "plan":"Read behavior and full rollout pages first. Inspect an eligible MLP Linear target. Probe explicit row IDs, prompt/reference/generation contexts and token positions; contrast failures with productive examples when justified. Use the measured direction_id for that same target and selected input columns from projection evidence. Propose one target, rank 1, positive strength up to 16, empty token selectors. The worker applies W - strength * outer(u, mask * (u^T W)) and rejects if the actual rounded delta exceeds the reviewed run norm limit. Start conservatively. Test correctness, preservation and termination together; retain only measured validation improvements.",
+            "evidence":"A general forward-measured, selected-column projection primitive inspired by published weight-space programming experiments. No transferred efficacy or exact blog reproduction is claimed.",
+            "limitation":"Only supported ordinary Linear modules are probed. Editable handles are tied to their measured target and state; no decoder residual hooks or cross-module direction transfer. Handles are hypotheses, not causal proof. Arbitrary vectors, hidden tests and custom gradients are not available. Probe and output/context budgets remain deployment-specific."}));
+    }
     if allowed.contains(&"activation_preserve") {
         cards.push(json!({"id":"preservation_aware","operations":["activation_preserve"],
             "when_to_use":"Reference errors coexist with preservation examples, especially after collateral regression.",
@@ -136,7 +144,7 @@ pub fn catalogue(dataset_mode: &str, allowed_operations: &Value, inspection: &Va
             "when_to_use":"Contrastive reference editing: reference-bearing examples identify a concrete generated error. For corpus data, references describe style rather than factual answers to reproduce.",
             "plan":"Measure forward activation keys and desired-minus-predicted output embedding directions on reference positions. Use one or a few eligible MLP output tensors and a small positive strength. Compare actual validation answers, reference loss where measured, and preservation outcomes. Change layer or strength only in response to those measurements.",
             "evidence":"IWIBench trace 7ea6c3e0cd5d4087b347bc8989484a3e used observed activations and token-specific writes; final target success was 0/3 to 1/3, with only 61/68 controls retained.",
-            "limitation":"Vespasian activation_rank_one is a bounded adaptation, not the trace operation. That trace does not establish efficacy here; it also shows collateral regression. Arbitrary activation handles, autograd and backpropagation are unavailable. This is contrastive forward-only editing, not exact ROME/MEMIT. Token-row operations, when separately listed, have different selectors and bounds."
+            "limitation":"Vespasian activation_rank_one is a bounded adaptation, not the trace operation. That trace does not establish efficacy here; it also shows collateral regression. Arbitrary user-supplied activation vectors, autograd and backpropagation are unavailable; measured direction handles are a separate operation when listed. This is contrastive forward-only editing, not exact ROME/MEMIT. Token-row operations, when separately listed, have different selectors and bounds."
         }));
     }
     if allowed.contains(&"scale") {

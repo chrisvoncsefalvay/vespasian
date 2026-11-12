@@ -74,6 +74,7 @@ def _replay(state: dict) -> dict:
         "max_turns": _int(config.get("max_turns")), "metric": str(config.get("metric") or "auto"),
         "phase": "Not started", "message": "Configure an experiment to begin.",
         "baseline": {}, "best": {}, "health_baseline": {}, "health_best": {},
+        "baseline_behavior": {}, "best_behavior": {},
         "turns": [], "changes": {}, "answers": [], "editor_calls": {},
         "retained_turn": 0, "structure": {}, "tensor": {}, "assessment": "", "plan": "",
         "current": 0, "total": 0, "spent_usd": None, "turn": 0,
@@ -136,6 +137,8 @@ def _replay(state: dict) -> dict:
             view["health_baseline"] = _dict(event.get("health"))
             view["health_best"] = view["health_baseline"]
             view["has_baseline"] = True
+            view["baseline_behavior"] = _dict(event.get("behavior"))
+            view["best_behavior"] = view["baseline_behavior"]
         elif kind == "model_structure":
             view["structure"] = event
         elif kind == "tensor_edit":
@@ -241,7 +244,8 @@ def _replay(state: dict) -> dict:
         if report.get("metric"):
             view["metric"] = str(report["metric"])
         for target, source in (("baseline", "baseline_metrics"), ("best", "best_metrics"),
-                               ("health_baseline", "baseline_health"), ("health_best", "best_health")):
+                               ("health_baseline", "baseline_health"), ("health_best", "best_health"),
+                               ("baseline_behavior", "baseline_behavior"), ("best_behavior", "best_behavior")):
             if isinstance(report.get(source), dict):
                 view[target] = report[source]
         if "health_max_drop" in report:
@@ -379,8 +383,34 @@ def _edit_loop(view: dict, selection: dict) -> str:
     note = "Candidate patches are tested locally. Only retained changes become the next starting point."
     if not stages:
         note = "No step-by-step receipts are available for this selection. Existing measurements remain visible below." if view["changes"] or view["has_baseline"] else "The editor assesses the starting model, proposes a bounded patch, tests it and keeps or reverts it before repeating."
-    return f'<section class="vs-edit-loop" aria-label="Observed editing loop"><div class="vs-section-heading"><h3>The measured edit loop</h3><span class="vs-kicker">{_turn_name(turn).upper()}</span></div><p class="vs-loop-note">{note}</p><ol>{"".join(items)}</ol>{_agent_tool_activity(view, turn)}{_inspection_summary(view, turn)}</section>'
+    return f'<section class="vs-edit-loop" aria-label="Observed editing loop"><div class="vs-section-heading"><h3>The measured edit loop</h3><span class="vs-kicker">{_turn_name(turn).upper()}</span></div><p class="vs-loop-note">{note}</p><ol>{"".join(items)}</ol>{_behavior_observations(view, turn)}{_agent_tool_activity(view, turn)}{_inspection_summary(view, turn)}</section>'
 
+
+
+def _behavior_observations(view: dict, turn: int) -> str:
+    baseline = _dict(view.get("baseline_behavior"))
+    selected = baseline if turn == 0 else _dict(_dict(view["changes"].get(turn)).get("behavior"))
+    if not selected:
+        for stage in ("test", "assess"):
+            selected = _dict(_dict(_dict(view["loop_stages"].get(turn, {}).get(stage)).get("details")).get("behavior"))
+            if selected:
+                break
+    if not selected:
+        return ""
+    labels = (("repetition", "Repetition flags"), ("length_truncation", "Output-limit endings"),
+              ("empty_output", "Empty outputs"), ("reference_mismatch", "Reference mismatches"),
+              ("format_only_mismatch", "Format-only mismatches"), ("preservation_mismatch", "Preservation mismatches"))
+    rows = []
+    for key, label in labels:
+        current = _dict(_dict(selected.get("signals")).get(key))
+        original = _dict(_dict(baseline.get("signals")).get(key))
+        if "count" not in current:
+            continue
+        before = str(_int(original["count"])) if "count" in original else "—"
+        ids = ", ".join(str(value) for value in _list(current.get("row_ids"))[:8])
+        rows.append(f'<tr><th>{label}</th><td>{before}</td><td>{_int(current["count"])}</td><td>{_text(ids, 300)}</td></tr>')
+    count = _int(selected.get("sample_count"))
+    return '<details class="vs-measurements" data-vs-details="behavior"><summary>Observed behavior · ' + str(count) + ' visible examples</summary><p>Diagnostics guide inspection. Repetition is a heuristic, and hitting an output limit does not prove an answer is wrong. Correctness and preservation still decide retention. Sealed tests are excluded.</p><div class="vs-table-scroll"><table><thead><tr><th>Observation</th><th>Baseline</th><th>Selected</th><th>Example IDs</th></tr></thead><tbody>' + "".join(rows) + '</tbody></table></div></details>'
 
 
 def _agent_tool_activity(view: dict, turn: int) -> str:
@@ -389,7 +419,8 @@ def _agent_tool_activity(view: dict, turn: int) -> str:
         return ""
     labels = {"read_skill": "Read strategy skill", "inspect_targets": "Inspect edit targets",
               "inspect_tokens": "Inspect token candidates", "read_history": "Review measured rounds",
-              "read_rollouts": "Examine generated answers"}
+              "read_rollouts": "Examine generated answers", "read_behavior": "Inspect observed behavior",
+              "inspect_probe_modules": "Inspect activation probe targets", "probe_activations": "Measure selected activations"}
     terminal = view["status"] in {"complete", "stopped", "error", "cancelled"}
     items = []
     for record in records[-12:]:

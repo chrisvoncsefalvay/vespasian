@@ -112,6 +112,7 @@ JS = (ASSET_DIR / "workbench.js").read_text(encoding="utf-8") if (ASSET_DIR / "w
 
 from dashboard import render_dashboard
 import setup_helpers as setup
+from limits import DEFAULT_MAX_NEW_TOKENS, DEFAULT_MAX_SEQ_LENGTH, DEFAULT_MAX_RELATIVE_NORM, space_limits
 
 _MARK = '<svg viewBox="0 0 30 30" aria-hidden="true"><path d="M3 7 15 24 27 7M9 7l6 8 6-8" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>'
 HEADER = f"""<header class="vs-masthead">
@@ -128,6 +129,7 @@ def heading(title, description):
 
 def build_ui() -> tuple[gr.Blocks, dict[str, Any]]:
     controls: dict[str, Any] = {}
+    limits = space_limits()
     with gr.Blocks(title="Vespasian · Weight Space Editing Assistant", fill_width=True, delete_cache=(600, 7200)) as demo:
         gr.HTML(HEADER, elem_id="vs-header")
         with gr.Row(elem_id="vs-account", equal_height=False):
@@ -222,23 +224,27 @@ def build_ui() -> tuple[gr.Blocks, dict[str, Any]]:
                         with gr.Row(equal_height=False):
                             with gr.Column(min_width=280):
                                 controls["editor"] = gr.Radio(choices=[("OpenAI", "openai"), ("Anthropic", "anthropic")], value="openai", label="Editor provider", elem_id="vs-editor")
-                                controls["editor_model"] = gr.Dropdown(choices=setup.editor_choices("openai"), value="gpt-6.1-sol", allow_custom_value=True, label="Editor model", info="Choose a model or enter a custom model ID.", elem_id="vs-editor-model")
+                                controls["editor_model"] = gr.Dropdown(choices=setup.editor_choices("openai"), value="gpt-6.1-sol", allow_custom_value=True, label="Editor model", info="Use a listed model with supported strict-budget pricing. Custom-price estimates require the terminal with --budget-policy auto.", elem_id="vs-editor-model")
                                 controls["api_key"] = gr.Textbox(type="password", label="Editor API key", placeholder="Your provider’s API key", elem_id="vs-api-key")
                             with gr.Column(min_width=280):
                                 controls["budget"] = gr.Number(value=10.0, minimum=0.01, maximum=100, step=0.25, label="Editor budget · USD", elem_id="vs-budget")
-                                gr.HTML('<p class="vs-inline-note">Default: low reasoning, no turn cap, up to 128 answer tokens. The spending limit includes every editor decision and tool request.</p>')
+                                gr.HTML('<p class="vs-inline-note">Default: low editor reasoning, target thinking off, no turn cap. Generation limits are reviewed below. The spending limit includes every editor decision and tool request.</p>')
                                 controls["pricing_html"] = gr.HTML("", elem_id="vs-pricing")
                         with gr.Accordion("Advanced runtime settings", open=False, elem_id="vs-advanced-runtime"):
                             with gr.Row():
                                 controls["max_turns"] = gr.Textbox(value="", placeholder="No turn cap", label="Maximum edit turns · optional", info="Leave blank to use only the spending limit. There is no default turn cap.", elem_id="vs-max-turns")
                                 controls["reasoning_effort"] = gr.Dropdown(choices=["low", "medium", "high"], value="low", label="Editor reasoning effort", info="Sent to the selected provider; unsupported requests stop without substitution.", elem_id="vs-reasoning-effort")
-                                controls["max_new_tokens"] = gr.Number(value=128, minimum=1, maximum=128, step=1, precision=0, label="Maximum generated tokens per answer")
+                                controls["max_new_tokens"] = gr.Number(value=min(DEFAULT_MAX_NEW_TOKENS, limits["max_new_tokens"]), minimum=1, maximum=limits["max_new_tokens"], step=1, precision=0, label="Maximum generated tokens per answer", info="Includes any target thinking tokens. Reaching the cap truncates output.", elem_id="vs-max-new-tokens")
+                            with gr.Row():
+                                controls["thinking_mode"] = gr.Dropdown(choices=[("Off · preserve starter baseline", "off"), ("On · compatible chat models", "on"), ("Auto · model template default", "auto")], value="off", label="Target model thinking", info="Separate from editor reasoning. On requires a compatible chat template; auto may enable thinking and use more tokens.", elem_id="vs-thinking-mode")
+                                controls["max_seq_length"] = gr.Number(value=min(DEFAULT_MAX_SEQ_LENGTH, limits["max_seq_length"]), minimum=32, maximum=limits["max_seq_length"], step=1, precision=0, label="Maximum sequence tokens", info="Total context limit: the prompt and requested output must fit. Model support and GPU quota still apply.", elem_id="vs-max-seq-length")
+                                controls["max_relative_norm"] = gr.Number(value=DEFAULT_MAX_RELATIVE_NORM, minimum=0.000001, maximum=1, label="Direction-edit relative norm cap", info="Review a value from 0.000001 to 1 (default 0.1). Bounds the new weight-direction edit relative to each pre-edit tensor; other edits retain their safeguards.", elem_id="vs-max-relative-norm")
                             controls["prompt_format"] = gr.Dropdown(choices=[("Use model chat template", "auto"), ("Require chat template", "chat"), ("Plain text prompts", "plain")], value="auto", label="Prompt format", info="Models without a chat template require an explicit plain-text choice.")
                             controls["save_trajectory"] = gr.Checkbox(value=True, label="Include the edit trajectory in the run bundle")
-                            gr.HTML('<p class="vs-inline-note">Custom editor models require both token prices in USD per million tokens.</p>')
+                            gr.HTML('<p class="vs-inline-note">This Space uses strict budgeting with supported model prices and no price overrides. For custom-price estimates, use the terminal with --budget-policy auto; estimated spending is not a strict cap.</p>')
                             with gr.Row():
-                                controls["input_price"] = gr.Textbox(label="Input price", placeholder="Use the model rate", elem_id="vs-input-price")
-                                controls["output_price"] = gr.Textbox(label="Output price", placeholder="Use the model rate", elem_id="vs-output-price")
+                                controls["input_price"] = gr.Textbox(value="", label="Input price", visible=False, interactive=False, elem_id="vs-input-price")
+                                controls["output_price"] = gr.Textbox(value="", label="Output price", visible=False, interactive=False, elem_id="vs-output-price")
                         controls["save_format"] = gr.Radio(choices=[("Materialised model and compact patches", "model"), ("Compact patches only", "patch")], value="model", label="Final output", info="Latest/best patches are checkpointed during the run. Patch-only output needs the exact base model to replay.")
                         with gr.Accordion("Private patch backup · optional", open=False, elem_id="vs-patch-backup"):
                             controls["patch_backup"] = gr.Checkbox(value=False, label="Back up latest/best patches after measured rounds to my named private repository")
@@ -246,7 +252,7 @@ def build_ui() -> tuple[gr.Blocks, dict[str, Any]]:
                             controls["patch_create"] = gr.Checkbox(value=False, label="Create this private repository if it does not exist")
                             gr.HTML('<p class="vs-inline-note">Local patches need no account. Space storage is temporary and does not survive pod replacement; download or explicitly enable private backup to retain them.</p>')
                         with gr.Accordion("Deployment and spending limits", open=False, elem_id="vs-deployment-limits"):
-                            gr.HTML('<p class="vs-inline-note">The editor budget covers frontier API calls; Hugging Face manages GPU quota. This deployment allows up to $100 per run, 128 examples per dataset, four preservation checks with 16 examples each, 128 answer tokens and 1,024 sequence tokens. Seed 42, editor output cap 2,048 tokens and preservation tolerance 0 match the terminal defaults. Keep this tab open; five minutes without a browser heartbeat cancels the run. API cost is reserved before each request at the configured token rates, not enforced as a provider billing ceiling. Terminal CLI-login sessions instead report estimated spend between calls.</p>')
+                            gr.HTML(f'<p class="vs-inline-note">The editor budget covers frontier API calls; Hugging Face manages GPU quota. This deployment allows up to $100 per run, 128 examples per dataset, four preservation checks with 16 examples each, {limits["max_new_tokens"]:,} generated tokens per answer and {limits["max_seq_length"]:,} sequence tokens. Larger limits require operator configuration and do not guarantee long runs fit ZeroGPU memory or time quota. Seed 42, editor output cap 2,048 tokens and preservation tolerance 0 match the terminal defaults. Keep this tab open; five minutes without a browser heartbeat cancels the run. API cost is reserved before each request at the configured token rates, not enforced as a provider billing ceiling. Terminal CLI-login sessions instead report estimated spend between calls.</p>')
                         with gr.Row(elem_id="vs-setup-actions-editor"):
                             controls["back_data"] = gr.Button("← Data", variant="secondary")
                             controls["next_review"] = gr.Button("Review experiment →", variant="primary")

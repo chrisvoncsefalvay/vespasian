@@ -87,12 +87,13 @@ class InterfaceParityTests(unittest.TestCase):
             actual = self.space("evaluate", **request)
         self.assertEqual(expected["samples"], actual["samples"])
         self.assertEqual(expected["metrics"], actual["metrics"])
+        self.assertEqual(expected["behavior"], actual["behavior"])
 
     def test_all_supported_operations_match_through_accept_and_rollback(self):
         info = self.initialise()
-        self.assertEqual(set(info["allowed_operations"]), {"scale", "low_rank", "noise", "activation_rank_one", "activation_preserve", "token_row_scale", "token_row_interpolate", "token_row_residual"})
+        self.assertEqual(set(info["allowed_operations"]), {"scale", "low_rank", "noise", "direction_projection", "activation_rank_one", "activation_preserve", "token_row_scale", "token_row_interpolate", "token_row_residual"})
         self.compare_weights_and_rollouts()
-        for index, operation in enumerate(op for op in info["allowed_operations"] if not op.startswith("token_row_")):
+        for index, operation in enumerate(op for op in info["allowed_operations"] if not op.startswith("token_row_") and op != "direction_projection"):
             with self.subTest(operation=operation):
                 request = proposal(self.direct, operation=operation, seed=31 + index, strength=0.01)
                 expected = self.direct.edit(request)
@@ -110,9 +111,43 @@ class InterfaceParityTests(unittest.TestCase):
         for name, value in self.fixture.model.state_dict().items():
             self.assertTrue(torch.equal(value, self.original[name]), name)
 
+    def test_measured_direction_probes_and_projection_match_accept_and_rollback(self):
+        self.initialise()
+        self.compare_weights_and_rollouts()
+
+        def without_local_ids(value):
+            if isinstance(value, dict):
+                return {k:without_local_ids(v) for k,v in value.items() if k not in {"direction_id","state_id","elapsed_seconds"}}
+            if isinstance(value, list):
+                return [without_local_ids(item) for item in value]
+            return value
+
+        for accept in (True,False):
+            request = {"targets":[next(iter(self.direct.editable))],
+                       "contexts":[{"row_id":"edit:0","source":"generation","positions":[-2,-1]}],
+                       "contrast_contexts":[{"row_id":"preserve:0","source":"prompt","positions":[-1]}],"top_k":8}
+            first = self.direct.probe_activations(request)
+            second = self.space("probe_activations",**request)
+            self.assertEqual(without_local_ids(first),without_local_ids(second))
+            def edit_request(report):
+                entry = report["probes"][0]
+                return proposal(self.direct, targets=[entry["target"]], operation="direction_projection",rank=1,strength=.2,
+                                direction_id=entry["direction_id"],columns=[row["column"] for row in entry["top_columns"][:3]])
+            expected = self.direct.edit(edit_request(first))
+            actual = self.space("edit",**edit_request(second))
+            self.assertEqual(without_local_ids(expected),without_local_ids(actual))
+            self.compare_weights_and_rollouts()
+            if accept:
+                self.assertEqual(self.direct.accept({}),self.space("accept"))
+            else:
+                self.assertEqual(self.direct.rollback({}),self.space("rollback"))
+            self.compare_weights_and_rollouts()
+        for name,value in self.fixture.model.state_dict().items():
+            self.assertTrue(torch.equal(value,self.original[name]),name)
+
     def test_prompt_only_mode_has_the_same_restricted_capabilities(self):
         info = self.initialise("prompts")
-        self.assertEqual(info["allowed_operations"], ["scale", "low_rank", "noise", "token_row_scale", "token_row_interpolate"])
+        self.assertEqual(info["allowed_operations"], ["scale", "low_rank", "noise", "direction_projection", "token_row_scale", "token_row_interpolate"])
         self.compare_weights_and_rollouts()
 
     def inspect_both(self):

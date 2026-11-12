@@ -3,7 +3,7 @@ use serde_json::Value;
 use std::collections::HashSet;
 
 pub fn validate_proposal(p: &Value, editable: &Value) -> Result<()> {
-    let keys: [&str; 11] = [
+    let keys: [&str; 13] = [
         "targets",
         "operation",
         "strength",
@@ -15,6 +15,8 @@ pub fn validate_proposal(p: &Value, editable: &Value) -> Result<()> {
         "reflection",
         "token_ids",
         "source_token_ids",
+        "direction_id",
+        "columns",
     ];
     let obj = p
         .as_object()
@@ -51,6 +53,7 @@ pub fn validate_proposal(p: &Value, editable: &Value) -> Result<()> {
         "noise",
         "activation_rank_one",
         "activation_preserve",
+        "direction_projection",
         "token_row_residual",
         "token_row_scale",
         "token_row_interpolate",
@@ -127,8 +130,52 @@ pub fn validate_proposal(p: &Value, editable: &Value) -> Result<()> {
         bail!("MLP edits must have empty token selectors");
     }
     let strength = p["strength"].as_f64().unwrap_or(f64::NAN);
-    if !strength.is_finite() || !(1e-6..=0.1).contains(&strength.abs()) {
-        bail!("Mutation strength must have magnitude between 0.000001 and 0.1")
+    if operation == "direction_projection" {
+        if targets.len() != 1 || p["rank"].as_u64() != Some(1) {
+            bail!("Direction projection requires one tensor and rank one");
+        }
+        if !strength.is_finite() || !(1e-6..=16.).contains(&strength) {
+            bail!("Direction projection strength must be between 0.000001 and 16");
+        }
+        let handle = p["direction_id"].as_str().unwrap_or("");
+        if !handle.starts_with("direction_")
+            || handle.len() != 42
+            || !handle[10..].bytes().all(|c| c.is_ascii_hexdigit())
+        {
+            bail!("Direction projection requires a measured direction handle");
+        }
+        let columns = p["columns"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("Direction projection requires columns"))?;
+        let descriptor = editable
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|entry| entry["name"] == targets[0])
+            .unwrap();
+        let width = descriptor["shape"][1].as_u64().unwrap_or(0);
+        let mut selected = HashSet::new();
+        if columns.is_empty()
+            || columns.len() > 256
+            || columns.iter().any(|column| {
+                column
+                    .as_u64()
+                    .is_none_or(|value| value >= width || !selected.insert(value))
+            })
+        {
+            bail!("Select one to 256 distinct in-range input columns");
+        }
+    } else {
+        if p.get("direction_id")
+            .is_some_and(|value| !value.is_null() && value.as_str() != Some(""))
+            || p.get("columns")
+                .is_some_and(|value| value.as_array().is_none_or(|items| !items.is_empty()))
+        {
+            bail!("Only direction_projection accepts direction_id and columns");
+        }
+        if !strength.is_finite() || !(1e-6..=0.1).contains(&strength.abs()) {
+            bail!("Mutation strength must have magnitude between 0.000001 and 0.1")
+        }
     }
     if !(1..=16).contains(&p["rank"].as_u64().unwrap_or(0)) {
         bail!("Mutation rank must be between 1 and 16")
@@ -249,6 +296,28 @@ mod tests {
         assert!(validate_proposal(&generic, &editable).is_err());
         assert!(validate_proposal(&p, &json!([{"name":"embed.weight","shape":[10,4]}])).is_err());
     }
+    #[test]
+    fn measured_projection_requires_rank_one_handle_and_unique_columns() {
+        let editable =
+            json!([{"name":"layer.weight","shape":[24,48],"operations":["direction_projection"]}]);
+        let proposal = json!({"targets":["layer.weight"],"operation":"direction_projection","strength":6.,"rank":1,"seed":1,"rationale":"Measured direction","direction_id":"direction_0123456789abcdef0123456789abcdef","columns":[0,7,47]});
+        validate_proposal(&proposal, &editable).unwrap();
+        for (key, value) in [
+            ("strength", json!(-1)),
+            ("strength", json!(17)),
+            ("rank", json!(2)),
+            ("columns", json!([])),
+            ("columns", json!([1, 1])),
+            ("columns", json!([48])),
+            ("columns", json!([-1])),
+            ("direction_id", json!("unknown")),
+        ] {
+            let mut invalid = proposal.clone();
+            invalid[key] = value;
+            assert!(validate_proposal(&invalid, &editable).is_err(), "{invalid}");
+        }
+    }
+
     fn m(score: f64, loss: f64, p: f64) -> Value {
         json!({"validation":{"exact_match":score,"loss":loss},"preserve":{"exact_match":p,"loss":1.0}})
     }

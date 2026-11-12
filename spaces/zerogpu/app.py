@@ -26,8 +26,13 @@ FIELDS = (
     "example_limit", "test_dataset_source", "test_dataset_config", "test_dataset_split", "test_example_limit",
     "goal", "controls", "metric", "editor", "editor_model", "api_key", "hf_token", "budget", "max_turns",
     "max_new_tokens", "health_checks", "health_count", "health_policy", "health_limit_pp", "save_trajectory",
-    "input_price", "output_price", "reasoning_effort",
+    "input_price", "output_price", "reasoning_effort", "thinking_mode", "max_seq_length", "max_relative_norm",
 )
+# Presets never own identity or credentials. Keep those components out of the
+# output graph entirely rather than relying on skipped updates during rerenders.
+PRESET_FIELDS = tuple(name for name in FIELDS if name not in {
+    "model", "editor", "editor_model", "api_key", "hf_token", "input_price", "output_price",
+})
 PREVIEW_FIELDS = (
     "hf_task", "dataset_location", "dataset_source", "dataset_file", "dataset_config", "dataset_split", "dataset_mode",
     "prompt_field", "target_field", "text_field", "example_limit", "hf_token",
@@ -43,6 +48,8 @@ STEP_FIELDS = {
     "reasoning_effort": "vs-reasoning-effort", "budget": "vs-budget", "max_turns": "vs-max-turns", "health_checks": "vs-health-checks",
     "health_count": "vs-health-count", "health_limit_pp": "vs-health-limit", "health_policy": "vs-health-policy",
     "input_price": "vs-input-price", "output_price": "vs-output-price",
+    "thinking_mode": "vs-thinking-mode", "max_new_tokens": "vs-max-new-tokens",
+    "max_seq_length": "vs-max-seq-length", "max_relative_norm": "vs-max-relative-norm",
 }
 DEFAULT_SELECTION = {"turn": None, "split": "all", "outcome": "all", "page": 0, "follow": True}
 
@@ -364,11 +371,12 @@ def create_app():
         return gr.update(choices=choices, value=selected), memory, "", "", ""
 
     def pricing(provider, model, input_price, output_price):
-        rates = setup.editor_pricing(provider, model, input_price, output_price)
-        if rates["input_per_million"] is None or rates["output_per_million"] is None:
-            return '<p class="vs-inline-note">Add input and output token prices for this custom model before continuing.</p>'
+        errors = setup.strict_pricing_errors(provider, model, input_price, output_price)
+        if errors:
+            return '<p class="vs-inline-note" role="alert">' + html.escape(" ".join(dict.fromkeys(errors.values()))) + '</p>'
+        rates = setup.editor_pricing(provider, model)
         inputs, outputs = rates["input_per_million"], rates["output_per_million"]
-        return f'<p class="vs-inline-note">Budget rates per million tokens: ${inputs} input/${outputs} output. Custom prices override these rates.</p>'
+        return f'<p class="vs-inline-note">Base budget rates per million tokens: ${inputs} input/${outputs} output. The Space uses strict budgeting with no price overrides; supported cache and long-context rates are applied by the controller.</p>'
 
     def preset_changed(name):
         config = setup.preset_config(name) if name else {}
@@ -404,8 +412,8 @@ def create_app():
             controls[button].click(lambda destination=destination: gr.update(selected=destination), outputs=controls["setup_tabs"], queue=False, api_name=False)
         controls["setup_tabs"].select(review, inputs=all_inputs, outputs=controls["review_html"], queue=False, api_name=False)
         controls["model"].input(model_task_hint, inputs=[controls["model"], controls["hf_token"]], outputs=controls["task_help"], api_name=False, concurrency_limit=4)
-        controls["preset"].input(preset_changed, inputs=controls["preset"], outputs=[controls[name] for name in (*FIELDS, "preview_state", "test_preview_state", "preview_html", "test_preview_html")], queue=False, api_name=False)
-        controls["starter_submit"].click(load_quick_starter, inputs=controls["starter_input"], outputs=[controls[name] for name in (*FIELDS, "preview_state", "test_preview_state", "preview_html", "test_preview_html", "preset", "setup_tabs", "starter_status", "error_target", "error_behaviour", "error_data", "error_editor", "error_review")], queue=False, api_name=False, show_progress="hidden")
+        controls["preset"].input(preset_changed, inputs=controls["preset"], outputs=[controls[name] for name in (*PRESET_FIELDS, "preview_state", "test_preview_state", "preview_html", "test_preview_html")], queue=False, api_name=False)
+        controls["starter_submit"].click(load_quick_starter, inputs=controls["starter_input"], outputs=[controls[name] for name in (*PRESET_FIELDS, "preview_state", "test_preview_state", "preview_html", "test_preview_html", "preset", "setup_tabs", "starter_status", "error_target", "error_behaviour", "error_data", "error_editor", "error_review")], queue=False, api_name=False, show_progress="hidden")
         controls["dataset_mode"].change(mode_changed, inputs=[controls[name] for name in ("dataset_mode", "metric", "target_type")], outputs=[controls[name] for name in ("metric", "prompt_field", "target_field", "text_field", "mode_help", "target_type")], queue=False, api_name=False)
         controls["metric"].change(metric_help, inputs=controls["metric"], outputs=controls["metric_help"], queue=False, api_name=False)
         for name in ("target_type", "dataset_mode", "target_field", "text_field"):

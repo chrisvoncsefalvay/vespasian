@@ -1,6 +1,6 @@
 [package]
 name = "vespasian"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.91"
 description = "The Weight Space Editing Assistant"
@@ -11,7 +11,7 @@ documentation = "https://github.com/chrisvoncsefalvay/vespasian#readme"
 readme = "README.md"
 keywords = ["llm", "model-editing", "weight-editing", "tui", "ai"]
 categories = ["command-line-utilities", "science"]
-include = ["/src/**", "/python/*.py", "/python/requirements.txt", "/Cargo.toml", "/Cargo.lock", "/README.md", "/LICENSE", "/CHANGELOG.md", "/CONTRIBUTING.md", "/examples/**", "/scripts/generate_starters.py"]
+include = ["/src/**", "/python/*.py", "/python/fixtures/**", "/python/requirements.txt", "/Cargo.toml", "/Cargo.lock", "/README.md", "/LICENSE", "/CHANGELOG.md", "/CONTRIBUTING.md", "/examples/**", "/scripts/generate_starters.py"]
 
 [dependencies]
 anyhow = "1"

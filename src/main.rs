@@ -78,6 +78,12 @@ struct Cli {
     /// Prompt formatting; plain must be explicit when a tokenizer has no chat template
     #[arg(long, default_value = "auto", value_parser = ["auto", "chat", "plain"], global = true)]
     prompt_format: String,
+    /// Target-model thinking mode; separate from frontier editor reasoning effort
+    #[arg(long, default_value = "off", value_parser = ["off", "on", "auto"], global = true)]
+    thinking_mode: String,
+    /// Reviewed relative norm ceiling for measured direction edits (other edits retain their bounds)
+    #[arg(long, default_value_t = 0.1, value_parser = relative_norm, global = true)]
+    max_relative_norm: f64,
     /// Behaviour to develop, in your own words
     #[arg(long)]
     goal: Option<String>,
@@ -144,10 +150,10 @@ struct Cli {
     /// Maximum API output tokens per request
     #[arg(long,default_value_t=2048,value_parser=clap::value_parser!(u32).range(512..=32768))]
     max_output_tokens: u32,
-    /// Override input price in USD per million tokens
+    /// Override flat input price in USD per million tokens (estimated, auto policy only)
     #[arg(long)]
     input_price: Option<f64>,
-    /// Override output price in USD per million tokens
+    /// Override flat output price in USD per million tokens (estimated, auto policy only)
     #[arg(long)]
     output_price: Option<f64>,
     /// Use a specific model revision
@@ -175,9 +181,9 @@ struct Cli {
     device: String,
     #[arg(long,default_value_t=42,value_parser=clap::value_parser!(u64).range(0..=4294967295))]
     seed: u64,
-    #[arg(long,default_value_t=128,value_parser=clap::value_parser!(u32).range(1..=2048))]
+    #[arg(long,default_value_t=128,value_parser=clap::value_parser!(u32).range(1..=32768))]
     max_new_tokens: u32,
-    #[arg(long,default_value_t=1024,value_parser=clap::value_parser!(u32).range(32..=16384))]
+    #[arg(long,default_value_t=1024,value_parser=clap::value_parser!(u32).range(32..=131072))]
     max_seq_length: u32,
     /// Allowed absolute preservation-score decrease
     #[arg(long, default_value_t = 0.)]
@@ -526,6 +532,12 @@ async fn entry() -> Result<()> {
         .as_deref()
         .filter(|s| !s.trim().is_empty())
         .context("Provide --goal with the behaviour to develop")?;
+    if !cli.max_relative_norm.is_finite() || !(0.000001..=1.0).contains(&cli.max_relative_norm) {
+        bail!("Relative norm ceiling must be between 0.000001 and 1");
+    }
+    if cli.thinking_mode == "on" && cli.prompt_format == "plain" {
+        bail!("Thinking on requires a compatible chat template; choose auto or chat prompt formatting");
+    }
     if !cli.preserve_tolerance.is_finite() || !(0.0..=1.0).contains(&cli.preserve_tolerance) {
         bail!("Preservation tolerance must be between 0 and 1")
     }
@@ -557,6 +569,11 @@ async fn entry() -> Result<()> {
         cli.output_price,
         mode,
     )?;
+    budget.configure_provider(&cli.editor, cli.budget_policy == "strict")?;
+    let mode = budget.mode.clone();
+    if mode == "estimated_custom_api" && !cli.json {
+        eprintln!("  Spending notice: custom/unsupported model prices are flat estimates, not a verified provider spending ceiling.");
+    }
     let check = tokio::process::Command::new(python_path(&cli.python))
         .args([
             "-c",
@@ -656,6 +673,7 @@ async fn entry() -> Result<()> {
         output.join("patches.py"),
         include_str!("../python/patches.py"),
     )?;
+    write_worker_support(&output)?;
     let health_manifest = if cli.health_checks.is_empty() {
         Value::Null
     } else {
@@ -673,7 +691,7 @@ async fn entry() -> Result<()> {
     };
     write_json(
         &output.join("run.json"),
-        &json!({"version":env!("CARGO_PKG_VERSION"),"started_unix":now(),"dataset_source":if remote{dataset.clone()}else{fs::canonicalize(dataset)?},"dataset_selection":if remote{json!({"config":cli.dataset_config,"split":cli.dataset_split,"revision":cli.dataset_revision,"prompt_field":cli.prompt_field,"target_field":cli.target_field,"dataset_mode":cli.dataset_mode,"text_field":cli.text_field,"limit":cli.limit})}else{Value::Null},"dataset_sha256":data.sha256,"counts":data.counts,"target_type":cli.target_type,"hf_task":cli.hf_task,"task_metadata":task_metadata,"prompt_format":cli.prompt_format,"save_format":cli.save_format,"patch_backup":{"enabled":cli.patch_backup,"repo":cli.patch_repo,"create":cli.patch_create},"dataset_mode":data.mode,"text_field":cli.text_field,"model_requested":cli.model,"model":model,"revision":cli.revision,"goal":goal,"controls":cli.controls,"health_checks":cli.health_checks,"health_max_drop":cli.health_max_drop,"trajectory":{"saved":cli.save_trajectory,"repo":cli.trajectory_repo,"visibility":cli.trajectory_visibility,"create":cli.trajectory_create},"publish": {"repo":cli.publish_repo,"visibility":cli.publish_visibility,"create":cli.publish_create},"metric":cli.metric,"editor":cli.editor,"editor_model":editor_model,"budget":budget,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"seed":cli.seed,"max_new_tokens":cli.max_new_tokens,"max_seq_length":cli.max_seq_length,"preserve_tolerance":cli.preserve_tolerance}),
+        &json!({"version":env!("CARGO_PKG_VERSION"),"started_unix":now(),"dataset_source":if remote{dataset.clone()}else{fs::canonicalize(dataset)?},"dataset_selection":if remote{json!({"config":cli.dataset_config,"split":cli.dataset_split,"revision":cli.dataset_revision,"prompt_field":cli.prompt_field,"target_field":cli.target_field,"dataset_mode":cli.dataset_mode,"text_field":cli.text_field,"limit":cli.limit})}else{Value::Null},"dataset_sha256":data.sha256,"counts":data.counts,"target_type":cli.target_type,"hf_task":cli.hf_task,"task_metadata":task_metadata,"prompt_format":cli.prompt_format,"thinking_mode":cli.thinking_mode,"max_relative_norm":cli.max_relative_norm,"save_format":cli.save_format,"patch_backup":{"enabled":cli.patch_backup,"repo":cli.patch_repo,"create":cli.patch_create},"dataset_mode":data.mode,"text_field":cli.text_field,"model_requested":cli.model,"model":model,"revision":cli.revision,"goal":goal,"controls":cli.controls,"health_checks":cli.health_checks,"health_max_drop":cli.health_max_drop,"trajectory":{"saved":cli.save_trajectory,"repo":cli.trajectory_repo,"visibility":cli.trajectory_visibility,"create":cli.trajectory_create},"publish": {"repo":cli.publish_repo,"visibility":cli.publish_visibility,"create":cli.publish_create},"metric":cli.metric,"editor":cli.editor,"editor_model":editor_model,"budget":budget,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"seed":cli.seed,"max_new_tokens":cli.max_new_tokens,"max_seq_length":cli.max_seq_length,"preserve_tolerance":cli.preserve_tolerance}),
     )?;
     let live = !cli.no_tui
         && !cli.json
@@ -898,6 +916,10 @@ impl From<(&Cli, &clap::ArgMatches)> for wizard::WizardOptions {
             model: cli.model.clone(),
             hf_task: cli.hf_task.clone(),
             prompt_format: cli.prompt_format.clone(),
+            thinking_mode: cli.thinking_mode.clone(),
+            max_new_tokens: cli.max_new_tokens as usize,
+            max_seq_length: cli.max_seq_length as usize,
+            max_relative_norm: cli.max_relative_norm,
             save_format: cli.save_format.clone(),
             editor: cli.editor.clone(),
             metric: cli.metric.clone(),
@@ -937,6 +959,10 @@ fn apply_guided(cli: &mut Cli, selection: wizard::WizardResult) {
     cli.dataset_mode = selection.dataset_mode;
     cli.hf_task = selection.hf_task;
     cli.prompt_format = selection.prompt_format;
+    cli.thinking_mode = selection.thinking_mode;
+    cli.max_new_tokens = selection.max_new_tokens as u32;
+    cli.max_seq_length = selection.max_seq_length as u32;
+    cli.max_relative_norm = selection.max_relative_norm;
     cli.save_format = selection.save_format;
     cli.text_field = if selection.text_field.is_empty() {
         None
@@ -979,6 +1005,28 @@ fn apply_guided(cli: &mut Cli, selection: wizard::WizardResult) {
     } else {
         Some(selection.target_field)
     };
+}
+
+fn relative_norm(value: &str) -> std::result::Result<f64, String> {
+    let value: f64 = value
+        .parse()
+        .map_err(|_| "Expected a numeric relative norm".to_string())?;
+    if !value.is_finite() || !(0.000001..=1.0).contains(&value) {
+        return Err("Relative norm ceiling must be between 0.000001 and 1".into());
+    }
+    Ok(value)
+}
+
+fn write_worker_support(directory: &Path) -> Result<()> {
+    fs::write(
+        directory.join("behavior.py"),
+        include_str!("../python/behavior.py"),
+    )?;
+    fs::write(
+        directory.join("probes.py"),
+        include_str!("../python/probes.py"),
+    )?;
+    Ok(())
 }
 
 fn budget_mode(editor: &str, policy: &str) -> Result<&'static str> {
@@ -1075,24 +1123,57 @@ async fn frontier(
     {
         Ok(r) => r,
         Err(e) => {
-            if let Some(m) = e.downcast_ref::<editor::MeteredError>() {
-                b.settle(m.input_tokens, m.output_tokens, m.reported_cost_usd)?;
-                write_json(&output.join("budget.json"), b)?;
-            }
+            let metered = e.downcast_ref::<editor::MeteredError>();
+            let accounting_error = if let Some(m) = metered {
+                b.settle(
+                    m.input_tokens,
+                    m.output_tokens,
+                    m.reported_cost_usd,
+                    m.openai_usage.as_ref(),
+                )
+                .err()
+                .map(|error| error.to_string())
+            } else {
+                b.mark_unresolved();
+                None
+            };
+            write_json(&output.join("budget.json"), b)?;
             events.record(
                 "editor_error",
-                &json!({"id":tag,"error":format!("{e:#}"),"budget":b}),
+                &json!({"id":tag,"error":format!("{e:#}"),"accounting_error":accounting_error,
+                    "input_tokens":metered.map(|m| m.input_tokens),
+                    "output_tokens":metered.map(|m| m.output_tokens),
+                    "reported_cost_usd":metered.and_then(|m| m.reported_cost_usd),
+                    "openai_usage":metered.and_then(|m| m.openai_usage.as_ref()),
+                    "cost_usd":(b.last_cost_basis != "unresolved_usage").then_some(b.spent_usd-spent_before),
+                    "cost_basis":b.last_cost_basis,"reservation_usd":reserve,"budget":b}),
             )?;
             // The paid call receipt is durable even if live event output failed.
             let _ = notify("error", json!({"text":"Editor request stopped"}));
             return Err(e);
         }
     };
-    b.settle(r.input_tokens, r.output_tokens, r.reported_cost_usd)?;
+    let settlement = b.settle(
+        r.input_tokens,
+        r.output_tokens,
+        r.reported_cost_usd,
+        r.openai_usage.as_ref(),
+    );
     write_json(&output.join("budget.json"), b)?;
     write_json(&dir.join("response.json"), &r.value)?;
-    events.record("editor_response", &json!({"id":tag,"response":r.value,"input_tokens":r.input_tokens,"output_tokens":r.output_tokens,"reported_cost_usd":r.reported_cost_usd,"cost_usd":b.spent_usd-spent_before,"budget":b}))?;
-    events.emit(json!({"type":"cost","spent_usd":b.spent_usd,"budget_usd":b.limit_usd,"input_tokens":b.input_tokens,"output_tokens":b.output_tokens}))?;
+    events.record("editor_response", &json!({"id":tag,"response":r.value,"input_tokens":r.input_tokens,"output_tokens":r.output_tokens,
+        "reported_cost_usd":r.reported_cost_usd,"openai_usage":r.openai_usage,
+        "cost_usd":(b.last_cost_basis != "unresolved_usage").then_some(b.spent_usd-spent_before),
+        "cost_basis":b.last_cost_basis,"reservation_usd":reserve,
+        "accounting_error":settlement.as_ref().err().map(ToString::to_string),"budget":b}))?;
+    if let Err(error) = settlement {
+        let _ = notify(
+            "error",
+            json!({"text":"Editor usage needs reconciliation; stopped further requests"}),
+        );
+        return Err(error);
+    }
+    events.emit(json!({"type":"cost","spent_usd":b.spent_usd,"budget_usd":b.limit_usd,"input_tokens":b.input_tokens,"output_tokens":b.output_tokens,"cost_basis":b.last_cost_basis}))?;
     notify(
         "complete",
         json!({"text":"Response received","input_tokens":r.input_tokens,"output_tokens":r.output_tokens,"cost_usd":b.spent_usd-spent_before}),
@@ -1169,10 +1250,27 @@ async fn plan_with_tools(
                     strategies::catalogue(dataset_mode, &info["allowed_operations"], &updated);
                 session.refresh(updated, catalogue, query.into());
             }
-            session.last_result = match session.execute(&action) {
-                Ok(result) => result,
-                Err(error) => {
-                    json!({"tool":tool,"error":format!("{error:#}"),"weights_changed":false})
+            session.last_result = if tool == "probe_activations" {
+                let mut request = action["probe"].clone();
+                request["command"] = json!("probe_activations");
+                match worker.request(request, events).await {
+                    Ok(result) => {
+                        session.remember_probe_result(&result);
+                        result
+                    }
+                    Err(error) => {
+                        if error.downcast_ref::<worker::Rejection>().is_none() {
+                            return Err(error);
+                        }
+                        json!({"tool":tool,"error":format!("{error:#}"),"weights_changed":false})
+                    }
+                }
+            } else {
+                match session.execute(&action) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        json!({"tool":tool,"error":format!("{error:#}"),"weights_changed":false})
+                    }
                 }
             };
         }
@@ -1260,7 +1358,7 @@ async fn run(
         &output.join("worker.log"),
         cli.hf_token.as_deref(),
     )?;
-    let init = json!({"command":"init","model":model,"revision":cli.revision,"dataset":output.join("dataset.jsonl"),"device":cli.device,"seed":cli.seed,"max_seq_length":cli.max_seq_length,"prompt_format":cli.prompt_format,"health_path":if cli.health_checks.is_empty(){Value::Null}else{json!(output.join("health.json"))}});
+    let init = json!({"command":"init","model":model,"revision":cli.revision,"dataset":output.join("dataset.jsonl"),"device":cli.device,"seed":cli.seed,"max_seq_length":cli.max_seq_length,"prompt_format":cli.prompt_format,"thinking_mode":cli.thinking_mode,"max_relative_norm":cli.max_relative_norm,"health_path":if cli.health_checks.is_empty(){Value::Null}else{json!(output.join("health.json"))}});
     let info = w.request(init.clone(), events).await?;
     write_json(&output.join("model.json"), &info)?;
     let journal = output.join("patches");
@@ -1319,13 +1417,13 @@ async fn run(
     }
     write_json(&output.join("baseline.json"), &baseline)?;
     events.record("baseline", &baseline)?;
-    events.emit(json!({"type":"baseline","metrics":baseline["metrics"],"health":baseline["health"]["metrics"]}))?;
+    events.emit(json!({"type":"baseline","behavior":agent_tools::behavior_summary(&baseline),"metrics":baseline["metrics"],"health":baseline["health"]["metrics"]}))?;
     events.stage(
         "test",
         "completed",
         0,
         "Baseline answers and scores measured before editing",
-        json!({"metrics":baseline["metrics"],"health":baseline["health"]["metrics"],"source_turn":0}),
+        json!({"metrics":baseline["metrics"],"health":baseline["health"]["metrics"],"source_turn":0,"behavior":agent_tools::behavior_summary(&baseline)}),
     )?;
     let mut best = baseline.clone();
     let mut history: Vec<Value> = vec![];
@@ -1337,7 +1435,7 @@ async fn run(
             break;
         }
         let parent_turn = best_turn;
-        events.stage("assess", "completed", turn, "Reviewing the retained checkpoint's measured answers and previous outcomes; no new test is implied", json!({"source_turn":best_turn,"metrics":best["metrics"],"baseline_metrics":baseline["metrics"],"health":best["health"]["metrics"]}))?;
+        events.stage("assess", "completed", turn, "Reviewing the retained checkpoint's measured answers and previous outcomes; no new test is implied", json!({"source_turn":best_turn,"behavior":agent_tools::behavior_summary(&best),"metrics":best["metrics"],"baseline_metrics":baseline["metrics"],"health":best["health"]["metrics"]}))?;
         events.stage(
             "inspect",
             "started",
@@ -1376,7 +1474,7 @@ async fn run(
             "Tokenizer rows, tied aliases and current row norms were inspected",
             json!({"inspection":inspection}),
         )?;
-        let context = json!({"task":"Choose a justified next edit using lightweight discovery and read-only tools, or stop. Skills are optional guidance, not a whitelist. Inspect exact target names/token IDs before proposing. Use a custom public strategy when justified by measurements and supported operations. Prefer the provided edit tools to custom gradient optimisers. Inspect additional measured rollouts/history only when needed. Public summaries explain the choice and previous measured outcomes. Candidate changes start from retained weights. Improve validation; reference-loss breaks score ties only when measured. Preservation must pass. Never request sealed tests.","goal":cli.goal,"controls":cli.controls,"dataset_mode":data.mode,"metric":key,"turn":turn,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"best_metrics":agent_tools::measurements(&best["metrics"]),"baseline_metrics":agent_tools::measurements(&baseline["metrics"]),"recent_outcomes":agent_tools::history_summary(&history,3),"health":agent_tools::health_comparison(&best["health"]["metrics"],&baseline["health"]["metrics"]),"health_max_drop":cli.health_max_drop,"target_count":info["editable"].as_array().map(Vec::len),"token_candidate_count":inspection["token_candidates"].as_array().map(Vec::len)});
+        let context = json!({"task":"Choose a justified next edit using lightweight discovery and read-only tools, or stop. Skills are optional guidance, not a whitelist. Inspect exact target names/token IDs before proposing. Use a custom public strategy when justified by measurements and supported operations. Prefer the provided edit tools to custom gradient optimisers. Start with observed baseline and retained-state diagnostics. Inspect read_behavior, full rollout pages and selected activation probes to test a concrete failure hypothesis. Repetition or truncation is evidence to investigate, not automatic incorrectness; shorter wrong answers do not count as improvement. Use optional skills as aids, not a fixed menu. Inspect measured history when needed. Public summaries explain the choice and previous measured outcomes. Candidate changes start from retained weights. Improve validation; reference-loss breaks score ties only when measured. Preservation must pass. Never request sealed tests.","goal":cli.goal,"controls":cli.controls,"dataset_mode":data.mode,"metric":key,"turn":turn,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"best_metrics":agent_tools::measurements(&best["metrics"]),"baseline_metrics":agent_tools::measurements(&baseline["metrics"]),"baseline_behavior":agent_tools::behavior_summary(&baseline),"thinking_mode":cli.thinking_mode,"max_new_tokens":cli.max_new_tokens,"max_seq_length":cli.max_seq_length,"max_relative_norm":cli.max_relative_norm,"recent_outcomes":agent_tools::history_summary(&history,3),"health":agent_tools::health_comparison(&best["health"]["metrics"],&baseline["health"]["metrics"]),"health_max_drop":cli.health_max_drop,"target_count":info["editable"].as_array().map(Vec::len),"token_candidate_count":inspection["token_candidates"].as_array().map(Vec::len)});
         events.stage("plan", "started", turn, "The editor is discovering relevant skills and inspecting evidence before choosing a patch", json!({}))?;
         events.emit(json!({"type":"phase","phase":"reflecting","turn":turn,"message":format!("Choosing a skill and inspecting evidence · turn {turn}")}))?;
         let proposal = match plan_with_tools(
@@ -1474,7 +1572,7 @@ async fn run(
             write_json(&output.join(format!("turn-{turn:03}.json")), &record)?;
             events.record("turn", &record)?;
             history.push(record);
-            events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"metric":key,"accepted":false,"metrics":Value::Null,"health":Value::Null,"best_health":best["health"]["metrics"],"rationale":proposal["rationale"],"decision_reason":format!("Proposal rejected: {e}"),"best_metrics":best["metrics"]}))?;
+            events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"metric":key,"accepted":false,"metrics":Value::Null,"health":Value::Null,"best_health":best["health"]["metrics"],"rationale":proposal["rationale"],"decision_reason":format!("Proposal rejected: {e}"),"best_metrics":best["metrics"],"best_behavior":agent_tools::behavior_summary(&best)}))?;
             continue;
         }
         events.stage(
@@ -1523,7 +1621,7 @@ async fn run(
                 write_json(&output.join(format!("turn-{turn:03}.json")), &record)?;
                 events.record("turn", &record)?;
                 history.push(record);
-                events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"metric":key,"accepted":false,"metrics":Value::Null,"health":Value::Null,"best_health":best["health"]["metrics"],"rationale":proposal["rationale"],"decision_reason":reason,"best_metrics":best["metrics"]}))?;
+                events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"metric":key,"accepted":false,"metrics":Value::Null,"health":Value::Null,"best_health":best["health"]["metrics"],"rationale":proposal["rationale"],"decision_reason":reason,"best_metrics":best["metrics"],"best_behavior":agent_tools::behavior_summary(&best)}))?;
                 continue;
             }
         };
@@ -1563,7 +1661,7 @@ async fn run(
                 events.stage("decide", "completed", turn, "Candidate rolled back after evaluation failure", json!({"accepted":false,"metrics":best["metrics"]}))?;
                 let record=json!({"turn":turn,"parent_turn":parent_turn,"accepted":false,"proposal":proposal,"alteration":alteration,"error":format!("{e:#}"),"metrics":best["metrics"]});
                 write_json(&output.join(format!("turn-{turn:03}.json")),&record)?;events.record("turn", &record)?;history.push(record);
-                events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"mutation":alteration,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"metric":key,"accepted":false,"metrics":Value::Null,"health":Value::Null,"best_health":best["health"]["metrics"],"rationale":proposal["rationale"],"decision_reason":format!("Candidate rejected: {e}"),"best_metrics":best["metrics"]}))?;
+                events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"mutation":alteration,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"metric":key,"accepted":false,"metrics":Value::Null,"health":Value::Null,"best_health":best["health"]["metrics"],"rationale":proposal["rationale"],"decision_reason":format!("Candidate rejected: {e}"),"best_metrics":best["metrics"],"best_behavior":agent_tools::behavior_summary(&best)}))?;
                 continue;
             }
         };
@@ -1580,7 +1678,7 @@ async fn run(
                     write_json(&output.join(format!("turn-{turn:03}.json")), &record)?;
                     events.record("turn", &record)?;
                     history.push(record);
-                    events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"mutation":alteration,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"metric":key,"accepted":false,"metrics":candidate["metrics"],"health":candidate["health"]["metrics"],"best_metrics":best["metrics"],"best_health":best["health"]["metrics"],"rationale":proposal["rationale"],"decision_reason":format!("Candidate rejected: {error}")}))?;
+                    events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"mutation":alteration,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"metric":key,"accepted":false,"metrics":candidate["metrics"],"behavior":agent_tools::behavior_summary(&candidate),"health":candidate["health"]["metrics"],"best_metrics":best["metrics"],"best_behavior":agent_tools::behavior_summary(&best),"best_health":best["health"]["metrics"],"rationale":proposal["rationale"],"decision_reason":format!("Candidate rejected: {error}")}))?;
                     stop_reason = format!("health_stopped: {error:#}");
                     events.emit(json!({"type":"phase","phase":"saving","message":"Health evaluation stopped. Saving the retained checkpoint"}))?;
                     break;
@@ -1622,7 +1720,7 @@ async fn run(
                 write_json(&output.join(format!("turn-{turn:03}.json")), &record)?;
                 events.record("turn", &record)?;
                 history.push(record);
-                events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"mutation":alteration,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"metric":key,"accepted":false,"metrics":candidate["metrics"],"health":candidate["health"]["metrics"],"best_metrics":best["metrics"],"best_health":best["health"]["metrics"],"rationale":proposal["rationale"],"decision_reason":format!("Candidate rejected: {e}")}))?;
+                events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"mutation":alteration,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"metric":key,"accepted":false,"metrics":candidate["metrics"],"behavior":agent_tools::behavior_summary(&candidate),"health":candidate["health"]["metrics"],"best_metrics":best["metrics"],"best_behavior":agent_tools::behavior_summary(&best),"best_health":best["health"]["metrics"],"rationale":proposal["rationale"],"decision_reason":format!("Candidate rejected: {e}")}))?;
                 stop_reason = format!("scoring_stopped: {e:#}");
                 events.emit(json!({"type":"phase","phase":"saving","message":"Scoring stopped. Saving the retained checkpoint"}))?;
                 break;
@@ -1678,13 +1776,13 @@ async fn run(
                 write_json(&output.join(format!("turn-{turn:03}.json")), &record)?;
                 events.record("turn", &record)?;
                 history.push(record);
-                events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"mutation":alteration,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"metric":key,"accepted":false,"metrics":candidate["metrics"],"health":candidate["health"]["metrics"],"best_metrics":best["metrics"],"best_health":best["health"]["metrics"],"rationale":proposal["rationale"],"decision_reason":format!("Candidate rejected: {error}")}))?;
+                events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"mutation":alteration,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"metric":key,"accepted":false,"metrics":candidate["metrics"],"behavior":agent_tools::behavior_summary(&candidate),"health":candidate["health"]["metrics"],"best_metrics":best["metrics"],"best_behavior":agent_tools::behavior_summary(&best),"best_health":best["health"]["metrics"],"rationale":proposal["rationale"],"decision_reason":format!("Candidate rejected: {error}")}))?;
                 stop_reason = format!("controls_stopped: {error:#}");
                 events.emit(json!({"type":"phase","phase":"saving","message":"Controls check stopped. Saving the retained checkpoint"}))?;
                 break;
             }
         }
-        events.stage("test", "completed", turn, "Candidate answers, objective scores and preservation outcomes were measured", json!({"metrics":candidate["metrics"],"health":candidate["health"]["metrics"],"controls":candidate["controls"]}))?;
+        events.stage("test", "completed", turn, "Candidate answers, objective scores and preservation outcomes were measured", json!({"metrics":candidate["metrics"],"behavior":agent_tools::behavior_summary(&candidate),"health":candidate["health"]["metrics"],"controls":candidate["controls"]}))?;
         let retain = objective_improved
             && health_passed
             && (cli.controls.trim().is_empty() || candidate["controls"]["passed"] == true);
@@ -1705,17 +1803,17 @@ async fn run(
         )
         .await?;
         finish_patch(cli, &mut w, output, turn, retain, true, events).await?;
-        events.stage("decide", "completed", turn, if retain {"Retained the measured improvement as the next starting point"} else {"Rolled back the candidate to the previous retained checkpoint"}, json!({"accepted":retain,"decision_reason":decision_reason,"metrics":candidate["metrics"],"parent_turn":parent_turn}))?;
+        events.stage("decide", "completed", turn, if retain {"Retained the measured improvement as the next starting point"} else {"Rolled back the candidate to the previous retained checkpoint"}, json!({"accepted":retain,"decision_reason":decision_reason,"metrics":candidate["metrics"],"behavior":agent_tools::behavior_summary(&candidate),"parent_turn":parent_turn}))?;
         let record = json!({"turn":turn,"parent_turn":parent_turn,"accepted":retain,"proposal":proposal,"alteration":alteration,"evaluation":candidate,"health_passed":health_passed,"decision_reason":decision_reason});
         write_json(&output.join(format!("turn-{turn:03}.json")), &record)?;
         events.record("turn", &record)?;
-        history.push(json!({"turn":turn,"parent_turn":parent_turn,"accepted":retain,"proposal":proposal,"metrics":candidate["metrics"],"controls":candidate["controls"],"health":candidate["health"]["metrics"],"health_passed":health_passed,"decision_reason":decision_reason,"failures":candidate["samples"].as_array().map(|a|a.iter().filter(|r|if key=="exact_match"{r["exact_match"]!=true}else{r[key].as_f64().is_none_or(|score|score<1.0)}).take(8).cloned().collect::<Vec<_>>())}));
+        history.push(json!({"turn":turn,"parent_turn":parent_turn,"accepted":retain,"proposal":proposal,"metrics":candidate["metrics"],"behavior":agent_tools::behavior_summary(&candidate),"controls":candidate["controls"],"health":candidate["health"]["metrics"],"health_passed":health_passed,"decision_reason":decision_reason,"failures":candidate["samples"].as_array().map(|a|a.iter().filter(|r|if key=="exact_match"{r["exact_match"]!=true}else{r[key].as_f64().is_none_or(|score|score<1.0)}).take(8).cloned().collect::<Vec<_>>())}));
         if retain {
             best = candidate.clone();
             best_turn = turn;
             accepted += 1;
         }
-        events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"metric":key,"accepted":retain,"metrics":candidate["metrics"],"health":candidate["health"]["metrics"],"best_health":best["health"]["metrics"],"health_passed":health_passed,"rationale":proposal["rationale"],"decision_reason":decision_reason,"mutation":alteration,"best_metrics":best["metrics"]}))?;
+        events.emit(json!({"type":"turn","turn":turn,"parent_turn":parent_turn,"proposal":proposal,"max_turns":cli.max_turns,"reasoning_effort":cli.reasoning_effort,"budget_policy":cli.budget_policy,"metric":key,"accepted":retain,"metrics":candidate["metrics"],"behavior":agent_tools::behavior_summary(&candidate),"health":candidate["health"]["metrics"],"best_health":best["health"]["metrics"],"health_passed":health_passed,"rationale":proposal["rationale"],"decision_reason":decision_reason,"mutation":alteration,"best_metrics":best["metrics"],"best_behavior":agent_tools::behavior_summary(&best)}))?;
     }
     events.emit(
         json!({"type":"phase","phase":"saving","message":if cli.save_format=="model"{"Saving compact patches and materialising the retained model"}else{"Saving compact latest and best replayable patches"}}),
@@ -1839,7 +1937,7 @@ async fn run(
     fresh.stop().await;
     final_eval["controls"] = best["controls"].clone();
     write_json(&output.join("reloaded.json"), &final_eval)?;
-    let report = json!({"status":"complete","dataset_mode":data.mode,"stop_reason":stop_reason,"final_scoring_error":final_scoring_error,"metric":key,"accepted_turns":accepted,"best_turn":best_turn,"turns":history.len(),"baseline_metrics":baseline["metrics"],"best_metrics":best["metrics"],"final_metrics":final_eval["metrics"],"reload_verified":true,"controls":best["controls"],"trajectory":if cli.save_trajectory{json!("trajectory.jsonl")}else{Value::Null},"baseline_health":baseline["health"]["metrics"],"best_health":best["health"]["metrics"],"final_health":final_eval["health"]["metrics"],"health_checks":cli.health_checks,"health_max_drop":cli.health_max_drop,"budget":b,"save_format":cli.save_format,"patches":patch_bundle,"checkpoint":if cli.save_format=="model"{json!(output.join("checkpoint"))}else{Value::Null},"history":history,"assessment":assessment});
+    let report = json!({"status":"complete","dataset_mode":data.mode,"stop_reason":stop_reason,"final_scoring_error":final_scoring_error,"metric":key,"accepted_turns":accepted,"best_turn":best_turn,"turns":history.len(),"baseline_metrics":baseline["metrics"],"baseline_behavior":agent_tools::behavior_summary(&baseline),"final_behavior":agent_tools::behavior_summary(&final_eval),"best_metrics":best["metrics"],"best_behavior":agent_tools::behavior_summary(&best),"final_metrics":final_eval["metrics"],"reload_verified":true,"controls":best["controls"],"trajectory":if cli.save_trajectory{json!("trajectory.jsonl")}else{Value::Null},"baseline_health":baseline["health"]["metrics"],"best_health":best["health"]["metrics"],"final_health":final_eval["health"]["metrics"],"health_checks":cli.health_checks,"health_max_drop":cli.health_max_drop,"budget":b,"save_format":cli.save_format,"patches":patch_bundle,"checkpoint":if cli.save_format=="model"{json!(output.join("checkpoint"))}else{Value::Null},"history":history,"assessment":assessment});
     write_json(&output.join("report.json"), &report)?;
     Ok(report)
 }
@@ -2038,6 +2136,7 @@ async fn utility(command: &Commands, cli: &Cli) -> Result<()> {
         Commands::MaterializePatch{patch,model,revision,output,device}=>{
             let temporary=tempfile::tempdir()?;
             fs::write(temporary.path().join("patches.py"),include_str!("../python/patches.py"))?;
+            write_worker_support(temporary.path())?;
             fs::write(temporary.path().join("worker.py"),include_str!("../python/worker.py"))?;
             fs::write(temporary.path().join("health.py"),include_str!("../python/health.py"))?;
             let mut command=tokio::process::Command::new(python_path(&cli.python));
@@ -2112,6 +2211,7 @@ async fn utility(command: &Commands, cli: &Cli) -> Result<()> {
             let path=new_output(output)?;
             let runtime=python_path(&python.clone().or_else(|| cli.python.clone()));
             data::write(&path.join("dataset.jsonl"),&data.rows)?;
+            write_worker_support(&path)?;
             fs::write(path.join("worker.py"),include_str!("../python/worker.py"))?;
             fs::write(path.join("health.py"),include_str!("../python/health.py"))?;
             if !cli.health_checks.is_empty() {
@@ -2119,7 +2219,7 @@ async fn utility(command: &Commands, cli: &Cli) -> Result<()> {
             }
             let ev=Events{tx:None,file:Mutex::new(OpenOptions::new().create_new(true).write(true).open(path.join("events.jsonl"))?),json:cli.json,quiet:false,trajectory:None};
             let mut w=worker::Worker::spawn(&runtime,&path.join("worker.py"),&path.join("worker.log"),cli.hf_token.as_deref())?;
-            w.request(json!({"command":"init","model":fs::canonicalize(checkpoint)?,"dataset":path.join("dataset.jsonl"),"device":device,"seed":cli.seed,"max_seq_length":cli.max_seq_length,"prompt_format":cli.prompt_format,"health_path":if cli.health_checks.is_empty(){Value::Null}else{json!(path.join("health.json"))}}),&ev).await?;
+            w.request(json!({"command":"init","model":fs::canonicalize(checkpoint)?,"dataset":path.join("dataset.jsonl"),"device":device,"seed":cli.seed,"max_seq_length":cli.max_seq_length,"prompt_format":cli.prompt_format,"thinking_mode":cli.thinking_mode,"max_relative_norm":cli.max_relative_norm,"health_path":if cli.health_checks.is_empty(){Value::Null}else{json!(path.join("health.json"))}}),&ev).await?;
             let mut evaluation=w.request(json!({"command":"evaluate","splits":data.counts.keys().collect::<Vec<_>>(),"max_new_tokens":max_new_tokens,"label":"evaluation","receipt":{"file":"evaluation.json","pointer":"/samples"}}),&ev).await?;
             if !cli.health_checks.is_empty() {
                 evaluation["health"]=w.request(json!({"command":"health","max_new_tokens":max_new_tokens,"label":"Health checks","receipt":{"file":"evaluation.json","pointer":"/health/samples"}}),&ev).await?;
@@ -2295,8 +2395,45 @@ mod cli_tests {
     #[test]
     fn numeric_limits_fail_before_inference() {
         assert!(Cli::try_parse_from(["vespasian", "--seed", "4294967296"]).is_err());
-        assert!(Cli::try_parse_from(["vespasian", "--max-seq-length", "16385"]).is_err());
+        assert!(Cli::try_parse_from(["vespasian", "--max-seq-length", "131073"]).is_err());
     }
+    #[test]
+    fn target_thinking_and_reviewed_limits_are_explicit_and_independent() {
+        let defaults = Cli::try_parse_from(["vespasian"]).unwrap();
+        assert_eq!(defaults.thinking_mode, "off");
+        assert_eq!(defaults.reasoning_effort, "low");
+        assert_eq!(defaults.max_relative_norm, 0.1);
+        let cli = Cli::try_parse_from([
+            "vespasian",
+            "--thinking-mode",
+            "on",
+            "--max-new-tokens",
+            "32768",
+            "--max-seq-length",
+            "65536",
+            "--max-relative-norm",
+            "0.12",
+        ])
+        .unwrap();
+        assert_eq!(cli.thinking_mode, "on");
+        assert_eq!(cli.max_new_tokens, 32768);
+        assert_eq!(cli.max_seq_length, 65536);
+        assert_eq!(cli.max_relative_norm, 0.12);
+        for value in ["NaN", "inf", "0", "0.0000001", "1.1"] {
+            assert!(Cli::try_parse_from(["vespasian", "--max-relative-norm", value]).is_err());
+        }
+        assert!(Cli::try_parse_from(["vespasian", "--max-new-tokens", "32769"]).is_err());
+    }
+
+    #[test]
+    fn extracted_worker_includes_introspection_dependencies() {
+        let directory = tempfile::tempdir().unwrap();
+        write_worker_support(directory.path()).unwrap();
+        for name in ["behavior.py", "probes.py"] {
+            assert!(directory.path().join(name).metadata().unwrap().len() > 100);
+        }
+    }
+
     #[test]
     fn health_counts_and_trajectory_choices_are_optional_and_independent() {
         let defaults = Cli::try_parse_from(["vespasian"]).unwrap();
@@ -2502,6 +2639,10 @@ mod cli_tests {
             wizard::WizardResult {
                 hf_task: Some("text-generation".into()),
                 prompt_format: "auto".into(),
+                thinking_mode: "off".into(),
+                max_new_tokens: 128,
+                max_seq_length: 1024,
+                max_relative_norm: 0.1,
                 save_format: "model".into(),
                 target_type: "custom".into(),
                 dataset_mode: "paired".into(),

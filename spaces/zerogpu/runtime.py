@@ -18,7 +18,9 @@ import time
 import zipfile
 
 from bridge import Bridge
+from setup_helpers import strict_pricing_errors
 import hub
+from limits import DEFAULT_MAX_NEW_TOKENS, DEFAULT_MAX_SEQ_LENGTH, DEFAULT_MAX_RELATIVE_NORM, space_limits
 
 ROOT = Path(__file__).resolve().parent
 RUNS: dict[str, "Run"] = {}
@@ -27,8 +29,9 @@ MAX_ACTIVE = int(os.environ.get("VESPASIAN_SPACE_CONCURRENT_RUNS", "2"))
 RETENTION_SECONDS = 2 * 60 * 60
 CLIENT_TIMEOUT_SECONDS = 5 * 60
 PUBLIC_FIELDS = {"hf_task", "save_format", "prompt_format", "patch_backup", "patch_repo", "model", "goal", "controls", "budget", "max_turns", "reasoning_effort", "metric", "target_type",
-                 "dataset_mode", "editor", "editor_model", "health_checks", "health_count", "health_max_drop", "max_new_tokens"}
-REPORT_FIELDS = {"baseline_metrics", "best_metrics", "final_metrics", "baseline_health", "best_health",
+                 "dataset_mode", "editor", "editor_model", "health_checks", "health_count", "health_max_drop", "max_new_tokens", "max_seq_length", "thinking_mode", "max_relative_norm"}
+REPORT_FIELDS = {"baseline_behavior", "best_behavior", "final_behavior",
+                 "baseline_metrics", "best_metrics", "final_metrics", "baseline_health", "best_health",
                  "final_health", "best_turn", "metric", "stop_reason", "reload_verified", "checkpoint",
                  "health_max_drop", "budget", "final_scoring_error", "status", "turns", "accepted_turns"}
 
@@ -54,7 +57,14 @@ def child_environment(root, bridge, *, token=False, api_key="", editor="openai")
     return env
 
 
+def validate_pricing(config):
+    errors = strict_pricing_errors(config.get("editor"), config.get("editor_model"), config.get("input_price"), config.get("output_price"))
+    if errors:
+        raise ValueError(" ".join(dict.fromkeys(errors.values())))
+
+
 def validate(config):
+    limits = space_limits()
     for name in ("patch_backup", "patch_create"):
         if not isinstance(config.get(name, False), bool):
             raise ValueError("Private patch backup requires explicit boolean choices")
@@ -62,19 +72,29 @@ def validate(config):
         raise ValueError("Choose patch or model output")
     if config.get("prompt_format", "auto") not in {"auto", "chat", "plain"}:
         raise ValueError("Choose auto, chat or plain prompt format")
+    if config.get("thinking_mode", "off") not in {"off", "on", "auto"}:
+        raise ValueError("Choose target thinking off, on or auto")
+    if config.get("thinking_mode", "off") == "on" and config.get("prompt_format", "auto") == "plain":
+        raise ValueError("Target thinking on requires a compatible chat template, not plain prompts")
+    relative_norm = config.get("max_relative_norm", DEFAULT_MAX_RELATIVE_NORM)
+    if isinstance(relative_norm, bool) or not isinstance(relative_norm, (int, float)) or not math.isfinite(relative_norm) or not 1e-6 <= relative_norm <= 1:
+        raise ValueError("Maximum relative norm must be between 0.000001 and 1")
     if config.get("patch_backup") and not str(config.get("patch_repo") or "").strip():
         raise ValueError("Name the authorized private patch repository")
     if not str(config.get("goal") or "").strip():
         raise ValueError("Set an editing objective")
     if config.get("editor") not in {"openai", "anthropic"}:
         raise ValueError("Choose OpenAI or Anthropic as the editor")
+    validate_pricing(config)
     if not str(config.get("api_key") or "").strip():
         raise ValueError("Add an editor API key")
     if not 0.01 <= float(config.get("budget", 0)) <= 100:
         raise ValueError("Set an inference budget between $0.01 and $100")
     for name, minimum, maximum in (("example_limit", 5, 128), ("test_example_limit", 1, 128),
-                                   ("max_new_tokens", 1, 128), ("health_count", 1, 16)):
-        value = config.get(name, minimum)
+                                   ("max_new_tokens", 1, limits["max_new_tokens"]),
+                                   ("max_seq_length", 32, limits["max_seq_length"]), ("health_count", 1, 16)):
+        default = {"max_new_tokens": DEFAULT_MAX_NEW_TOKENS, "max_seq_length": DEFAULT_MAX_SEQ_LENGTH}.get(name, minimum)
+        value = config.get(name, default)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or int(value) != value or not minimum <= value <= maximum:
             raise ValueError(f"{name.replace('_', ' ').capitalize()} must be between {minimum} and {maximum}")
     turns = config.get("max_turns")
@@ -91,6 +111,7 @@ def validate(config):
 
 
 def command(config, data, output, revision):
+    validate_pricing(config)
     binary = Path(os.environ.get("VESPASIAN_SPACE_BINARY", ROOT / "bin/vespasian"))
     shim = ROOT / "python_bridge.py"
     for path in (binary, shim):
@@ -106,7 +127,10 @@ def command(config, data, output, revision):
             "--editor", config["editor"], "--editor-model", config["editor_model"],
             "--budget", str(config["budget"]), "--budget-policy", "strict",
             "--reasoning-effort", config.get("reasoning_effort", "low"),
-            "--max-new-tokens", str(int(config["max_new_tokens"])), "--max-seq-length", "1024",
+            "--max-new-tokens", str(int(config.get("max_new_tokens", DEFAULT_MAX_NEW_TOKENS))),
+            "--max-seq-length", str(int(config.get("max_seq_length", DEFAULT_MAX_SEQ_LENGTH))),
+            "--thinking-mode", config.get("thinking_mode", "off"),
+            "--max-relative-norm", str(config.get("max_relative_norm", DEFAULT_MAX_RELATIVE_NORM)),
             "--seed", "42", "--max-output-tokens", "2048", "--preserve-tolerance", "0"]
     args.extend(["--save-format", config.get("save_format", "model"), "--prompt-format", config.get("prompt_format", "auto")])
     if config.get("patch_backup"):
@@ -121,9 +145,6 @@ def command(config, data, output, revision):
         args.extend(["--health-check", f"{check}:{int(config['health_count'])}"])
     if config.get("health_max_drop") is not None:
         args.extend(["--health-max-drop", str(config["health_max_drop"])])
-    for name in ("input_price", "output_price"):
-        if config.get(name) is not None:
-            args.extend(["--" + name.replace("_", "-"), str(config[name])])
     if config.get("save_trajectory"):
         args.append("--save-trajectory")
     return args
@@ -136,7 +157,10 @@ class Run:
         self.root = Path(tempfile.mkdtemp(prefix="vs-"))
         self.root.chmod(0o700)
         self.output = self.root / "run"
-        self.config = {key: value for key, value in config.items() if key in PUBLIC_FIELDS}
+        public_config = {"thinking_mode": "off", "max_new_tokens": DEFAULT_MAX_NEW_TOKENS,
+                         "max_seq_length": DEFAULT_MAX_SEQ_LENGTH, "max_relative_norm": DEFAULT_MAX_RELATIVE_NORM,
+                         **config}
+        self.config = {key: value for key, value in public_config.items() if key in PUBLIC_FIELDS}
         self.secrets = tuple(value for value in (token, config.get("api_key")) if value)
         self.started = time.monotonic()
         self.events = []

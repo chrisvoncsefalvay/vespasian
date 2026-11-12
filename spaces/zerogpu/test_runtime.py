@@ -26,7 +26,7 @@ class RuntimeTests(unittest.TestCase):
         self.bridge = SimpleNamespace(path=self.root / "worker.sock", secret="session-secret")
         self.config = {
             "goal": "Answer briefly", "editor": "openai", "api_key": "visitor-api-key",
-            "model": "test/model", "editor_model": "test/editor", "budget": 0.5,
+            "model": "test/model", "editor_model": "gpt-6.1-sol", "budget": 0.5,
             "max_turns": 2, "max_new_tokens": 16, "example_limit": 5,
         }
 
@@ -56,6 +56,74 @@ class RuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "reasoning"):
             runtime.validate({**self.config, "reasoning_effort": "none"})
 
+
+    def test_all_quick_starters_use_the_paid_controller_with_strict_budget(self):
+        import setup_helpers as setup
+        binary = self.root / "bin/vespasian"
+        binary.parent.mkdir()
+        binary.write_text("fixture")
+        (self.root / "python_bridge.py").write_text("fixture")
+        for card in setup.quick_starter_cards():
+            with self.subTest(starter=card["id"]):
+                config = {**self.config, **setup.preset_config(card["id"])}
+                runtime.validate(config)
+                with patch.object(runtime, "ROOT", self.root), patch.dict(os.environ, {}, clear=True):
+                    args = runtime.command(config, config["dataset_file"], self.root / "output", "a" * 40)
+                self.assertEqual(args[0], str(binary))
+                self.assertEqual(args[1], config["dataset_file"])
+                self.assertEqual(args[args.index("--editor") + 1], "openai")
+                self.assertEqual(args[args.index("--budget-policy") + 1], "strict")
+                self.assertEqual(float(args[args.index("--budget") + 1]), 10)
+                self.assertEqual(args[args.index("--reasoning-effort") + 1], "low")
+                self.assertEqual(args[args.index("--thinking-mode") + 1], "off")
+                self.assertEqual(args[args.index("--max-seq-length") + 1], "1024")
+                self.assertEqual(args[args.index("--max-relative-norm") + 1], "0.1")
+                self.assertEqual(args[args.index("--metric") + 1], "exact_match")
+                self.assertIn("--save-trajectory", args)
+                self.assertNotIn("--max-turns", args)
+                self.assertNotIn("evaluate", args)
+                self.assertNotIn("--patch-backup", args)
+                self.assertNotIn(config["api_key"], args)
+
+    def test_inspection_settings_reach_controller_and_public_metadata(self):
+        binary = self.root / "bin/vespasian"
+        binary.parent.mkdir()
+        binary.write_text("fixture")
+        (self.root / "python_bridge.py").write_text("fixture")
+        config = {**self.config, "thinking_mode": "on", "max_new_tokens": 32768,
+                  "max_seq_length": 131072, "max_relative_norm": 0.75}
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(ValueError, "128"):
+                runtime.validate(config)
+        with patch.dict(os.environ, {"VESPASIAN_SPACE_MAX_NEW_TOKENS": "32768", "VESPASIAN_SPACE_MAX_SEQ_LENGTH": "131072"}):
+            runtime.validate(config)
+            with patch.object(runtime, "ROOT", self.root), patch.dict(os.environ, {"VESPASIAN_SPACE_BINARY": str(binary)}):
+                args = runtime.command(config, "data.jsonl", "output", "revision")
+        for flag, value in (("--thinking-mode", "on"), ("--max-new-tokens", "32768"),
+                            ("--max-seq-length", "131072"), ("--max-relative-norm", "0.75")):
+            self.assertEqual(args[args.index(flag) + 1], value)
+        run = runtime.Run("visitor", config)
+        self.addCleanup(shutil.rmtree, run.root)
+        for field in ("thinking_mode", "max_new_tokens", "max_seq_length", "max_relative_norm"):
+            self.assertEqual(run.state()["config"][field], config[field])
+        self.assertNotIn("api_key", run.state()["config"])
+        legacy = runtime.Run("visitor", self.config)
+        self.addCleanup(shutil.rmtree, legacy.root)
+        self.assertEqual(legacy.config["thinking_mode"], "off")
+        self.assertEqual(legacy.config["max_seq_length"], 1024)
+        self.assertEqual(legacy.config["max_relative_norm"], 0.1)
+
+    def test_inspection_settings_reject_invalid_and_incompatible_values(self):
+        for field, values in (("thinking_mode", ("none", True, None)),
+                              ("max_seq_length", (31, 1025, 32.5, True, float("nan"))),
+                              ("max_relative_norm", (0, 0.0000001, -0.1, 1.01, True, float("nan"), float("inf")))):
+            for value in values:
+                with self.subTest(field=field, value=value), patch.dict(os.environ, {}, clear=True), self.assertRaises(ValueError):
+                    runtime.validate({**self.config, field: value})
+        with self.assertRaisesRegex(ValueError, "compatible chat template"):
+            runtime.validate({**self.config, "thinking_mode": "on", "prompt_format": "plain"})
+        for thinking in ("off", "auto"):
+            runtime.validate({**self.config, "thinking_mode": thinking, "prompt_format": "plain", "max_relative_norm": 1})
 
     def test_task_output_prompt_and_private_backup_flags_are_explicit(self):
         binary = self.root / "bin/vespasian"
@@ -160,20 +228,28 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(args[args.index("--controls") + 1], "")
         self.assertTrue(all(isinstance(value, str) for value in args))
 
-    def test_custom_token_prices_and_zero_regression_limit_reach_controller(self):
+    def test_strict_prices_are_checked_before_command_and_zero_drop_survives(self):
         binary = self.root / "bin/vespasian"
         binary.parent.mkdir()
         binary.write_text("binary fixture")
         (self.root / "python_bridge.py").write_text("launcher fixture")
-        config = {**self.config, "input_price": 2.25, "output_price": 9.5, "health_max_drop": 0}
-        with patch.object(runtime,"ROOT",self.root),patch.dict(os.environ,{},clear=True):
-            args = runtime.command(config,self.root/"input.jsonl",self.root/"output","a"*40)
-            tracked = runtime.command({**config,"input_price":None,"output_price":None,"health_max_drop":None},self.root/"input.jsonl",self.root/"output","a"*40)
-        self.assertEqual(args[args.index("--input-price")+1],"2.25")
-        self.assertEqual(args[args.index("--output-price")+1],"9.5")
-        self.assertEqual(args[args.index("--health-max-drop")+1],"0")
-        for flag in ("--input-price","--output-price","--health-max-drop"):
-            self.assertNotIn(flag,tracked)
+        config = {**self.config, "health_max_drop": 0}
+        with patch.object(runtime, "ROOT", self.root), patch.dict(os.environ, {}, clear=True):
+            args = runtime.command(config, self.root / "input.jsonl", self.root / "output", "a" * 40)
+            tracked = runtime.command({**config, "input_price": " ", "output_price": None, "health_max_drop": None}, self.root / "input.jsonl", self.root / "output", "a" * 40)
+            for invalid in ({"input_price": 2}, {"output_price": 10},
+                            {"editor_model": "custom-model", "input_price": 2, "output_price": 10},
+                            {"editor_model": "custom-model"}, {"editor": "anthropic", "editor_model": "gpt-6.1-sol"}):
+                with self.subTest(invalid=invalid):
+                    for operation in (lambda c: runtime.validate(c), lambda c: runtime.command(c, "data", "output", "revision")):
+                        with self.assertRaisesRegex(ValueError, "--budget-policy auto"):
+                            operation({**config, **invalid})
+        self.assertEqual(args[args.index("--health-max-drop") + 1], "0")
+        self.assertEqual(args[args.index("--budget-policy") + 1], "strict")
+        for flag in ("--input-price", "--output-price", "--health-max-drop"):
+            self.assertNotIn(flag, tracked)
+        for editor, model in (("openai", "gpt-6.1-sol"), ("anthropic", "claude-sonnet-5-5")):
+            runtime.validate({**config, "editor": editor, "editor_model": model})
 
     def test_completed_report_exposes_only_public_results_and_redacts_secrets(self):
         run = runtime.Run("session-a",self.config,"visitor-hf-token")
@@ -201,6 +277,21 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn("[redacted]",encoded)
         run.secrets = ()
         self.assertNotIn("visitor-api-key",json.dumps(run.state()))
+
+    def test_report_preserves_measured_behavior_and_redacts_secrets(self):
+        run = runtime.Run("visitor", self.config)
+        self.addCleanup(shutil.rmtree, run.root)
+        run.output.mkdir()
+        behavior = {"baseline_behavior": {"looping": 2, "note": "visitor-api-key"},
+                    "best_behavior": {"looping": 0}, "final_behavior": {"truncated": 1},
+                    "unknown": "must stay private"}
+        (run.output / "report.json").write_text(json.dumps(behavior))
+        run.load_report()
+        public = run.state()["report"]
+        self.assertEqual(set(public), {"baseline_behavior", "best_behavior", "final_behavior"})
+        self.assertEqual(public["best_behavior"], {"looping": 0})
+        self.assertEqual(public["final_behavior"], {"truncated": 1})
+        self.assertNotIn("visitor-api-key", json.dumps(public))
 
     def test_missing_or_incomplete_report_keeps_public_state_usable(self):
         run = runtime.Run("session-a",self.config)

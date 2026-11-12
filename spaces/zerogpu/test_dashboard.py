@@ -56,6 +56,21 @@ class StrategySummaryTests(unittest.TestCase):
         self.assertNotIn("Apply <small>", rendered)
 
 
+class BehaviorObservationTests(unittest.TestCase):
+    def test_measured_behavior_is_visible_without_claiming_correctness(self):
+        current = state()
+        observation = {"sample_count": 4, "signals": {"repetition": {"count": 1, "row_ids": ["validation:0<script>"]}, "length_truncation": {"count": 2, "row_ids": []}}}
+        next(event for event in current["events"] if event["type"] == "baseline")["behavior"] = observation
+        rendered = dashboard.render_dashboard(current, {"turn": 0, "follow": False})
+        for expected in ("Observed behavior", "Repetition flags", "Output-limit endings", "Correctness and preservation still decide retention", "validation:0&lt;script&gt;"):
+            self.assertIn(expected, rendered)
+        self.assertNotIn("validation:0<script>", rendered)
+        self.assertNotIn("Loop repaired", rendered)
+
+    def test_legacy_runs_do_not_invent_diagnostics(self):
+        self.assertNotIn("Observed behavior", dashboard.render_dashboard(state()))
+
+
 class Elements(HTMLParser):
     def __init__(self, value):
         super().__init__()

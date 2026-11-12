@@ -1431,6 +1431,18 @@ fn detail_lines(state: &Dashboard, width: u16) -> Vec<Line<'static>> {
                     &value_text(&state.model_structure["editable"]),
                     width,
                 );
+                if let Some(event) =
+                    state.loop_stages.iter().rev().find(|event| {
+                        event["turn"] == 0 && event["details"]["behavior"].is_object()
+                    })
+                {
+                    detail_section(
+                        &mut lines,
+                        "OBSERVED BEHAVIOR (NOT ACCEPTANCE SCORES)",
+                        &behavior_text(&event["details"]["behavior"]),
+                        width,
+                    );
+                }
             } else if let Some(change) = state.changes.get(selected - 1) {
                 detail_section(
                     &mut lines,
@@ -1468,6 +1480,14 @@ fn detail_lines(state: &Dashboard, width: u16) -> Vec<Line<'static>> {
                         &field(event, "summary"),
                         width,
                     );
+                    if event["details"]["behavior"].is_object() {
+                        detail_section(
+                            &mut lines,
+                            "OBSERVED BEHAVIOR (NOT ACCEPTANCE SCORES)",
+                            &behavior_text(&event["details"]["behavior"]),
+                            width,
+                        );
+                    }
                     if event["stage"] == "inspect" && event["status"] == "completed" {
                         detail_section(
                             &mut lines,
@@ -2121,6 +2141,27 @@ fn clean(text: &str) -> String {
         }
     }
     output
+}
+
+fn behavior_text(summary: &Value) -> String {
+    let mut rows = vec![format!(
+        "{} visible examples; sealed tests excluded.",
+        summary["sample_count"].as_u64().unwrap_or(0)
+    )];
+    for (key, label) in [
+        ("repetition", "Repetition flags"),
+        ("length_truncation", "Output-limit endings"),
+        ("empty_output", "Empty outputs"),
+        ("reference_mismatch", "Reference mismatches"),
+        ("format_only_mismatch", "Format-only mismatches"),
+        ("preservation_mismatch", "Preservation mismatches"),
+    ] {
+        if let Some(count) = summary["signals"][key]["count"].as_u64() {
+            rows.push(format!("{label}: {count}"));
+        }
+    }
+    rows.push("Repetition and truncation are observations, not proof of incorrectness. Correctness and preservation still decide retention.".into());
+    rows.join("\n")
 }
 
 #[cfg(test)]

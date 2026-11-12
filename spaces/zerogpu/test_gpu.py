@@ -69,6 +69,128 @@ class GPUStateTests(unittest.TestCase):
         for name, value in self.fixture.model.state_dict().items():
             self.assertTrue(torch.equal(value, self.original[name]), name)
 
+    def probe_request(self, source="prompt", row_id="edit:0"):
+        return {"targets": [next(iter(self.fixture.editable))],
+                "contexts": [{"row_id": row_id, "source": source, "positions": [-1]}], "top_k": 8}
+
+    def projection_request(self, report):
+        row = report["probes"][0]
+        return {"proposal": {"targets": [row["target"]], "operation": "direction_projection", "strength": .2,
+            "rank": 1, "seed": 42, "rationale": "Project a measured output direction on selected columns",
+            "direction_id": row["direction_id"], "columns": [item["column"] for item in row["top_columns"][:3]]}}
+
+    def test_probe_cache_restores_for_identical_projection_and_cpu_rollback(self):
+        self.initialise(thinking_mode="auto", max_relative_norm=.2)
+        initial_location = gpu._read_metadata(self.state)[1]
+        report, _ = self.call("probe_activations", **self.probe_request())
+        metadata, tensors = gpu._read_snapshot(self.state)
+        direction = report["probes"][0]["direction_id"]
+        self.assertNotIn("vector", json.dumps(report))
+        self.assertIn(direction, metadata["engine"]["probe_cache"])
+        self.assertEqual(metadata["engine"]["thinking_mode"], "auto")
+        self.assertEqual(metadata["engine"]["max_relative_norm"], .2)
+        location = gpu._read_metadata(self.state)[1]
+        self.assertEqual((location / "tensors.safetensors").stat().st_ino, (initial_location / "tensors.safetensors").stat().st_ino)
+        reference = gpu._restore_engine(metadata, tensors, lambda event: None)
+        request = self.projection_request(report)
+        expected = reference.edit(request)
+        actual, _ = self.call("edit", **request)
+        self.assertEqual(actual["changed_tensors"], expected["changed_tensors"])
+        name = report["probes"][0]["target"]
+        pending = gpu._read_snapshot(self.state)[1]["current." + name]
+        self.assertTrue(torch.equal(pending, reference.editable[name]))
+        self.call("evaluate", splits=["validation"], max_new_tokens=3)
+        with patch.object(gpu, "_gpu_dispatch", side_effect=AssertionError("Rollback must remain on CPU")):
+            self.call("rollback")
+        rolled_back, values = gpu._read_snapshot(self.state)
+        self.assertEqual(rolled_back["engine"]["probe_cache"], metadata["engine"]["probe_cache"])
+        self.assertEqual(values, {})
+        self.call("edit", **request)  # Exact rollback retains its measured direction.
+        self.call("rollback")
+        self.assert_template_unchanged()
+
+    def test_cpu_accept_invalidates_measured_handles_and_cached_generations(self):
+        self.initialise()
+        self.call("evaluate", splits=["edit"], max_new_tokens=3)
+        report, _ = self.call("probe_activations", **self.probe_request(source="generation"))
+        request = self.projection_request(report)
+        state_id = report["state_id"]
+        self.call("edit", **request)
+        with patch.object(gpu, "_gpu_dispatch", side_effect=AssertionError("Accept must remain on CPU")):
+            self.call("accept")
+        metadata, _ = gpu._read_snapshot(self.state)
+        self.assertNotEqual(metadata["engine"]["probe_state_id"], state_id)
+        self.assertEqual(metadata["engine"]["probe_cache"], {})
+        self.assertEqual(metadata["engine"]["probe_evaluations"], {})
+        events = list(gpu.dispatch(str(self.state), {"id":9001,"command":"edit",**request}))
+        self.assertFalse(events[-1]["ok"])
+        self.assertIn("handle", events[-1]["error"])
+        self.assert_template_unchanged()
+
+    def test_cpu_accept_promotes_candidate_generations_without_another_evaluation(self):
+        self.initialise()
+        self.call("evaluate", splits=["edit"], max_new_tokens=3)
+        report, _ = self.call("probe_activations", **self.probe_request())
+        self.call("edit", **self.projection_request(report))
+        with patch.object(gpu, "MAX_EXAMPLES", 1):
+            candidate, _ = self.call("evaluate", splits=["validation", "preserve"], max_new_tokens=4)
+        pending, _ = gpu._read_snapshot(self.state)
+        self.assertEqual(set(pending["engine"]["probe_evaluations"]), {"edit:0"})
+        self.assertEqual(set(pending["engine"]["probe_candidate_evaluations"]), {"validation:0", "preserve:0"})
+        self.call("accept")
+        retained, _ = gpu._read_snapshot(self.state)
+        self.assertFalse(retained["engine"]["probe_cache"])
+        self.assertFalse(retained["engine"]["probe_candidate_evaluations"])
+        self.assertEqual(retained["engine"]["probe_evaluations"]["validation:0"]["tokens"], candidate["samples"][0]["token_ids"])
+        self.assertEqual(retained["engine"]["probe_state_id"], pending["engine"]["probe_candidate_state_id"])
+        self.call("probe_activations", **self.probe_request(source="generation", row_id="validation:0"))
+
+    def test_batched_probes_keep_global_ids_health_does_not_replace_cache(self):
+        from health import prepare, parse_selection
+        self.fixture.dataset.insert(1, {"prompt":"second edit","target":"s","split":"edit"})
+        self.dataset.write_text("\n".join(json.dumps(row) for row in self.fixture.dataset))
+        health = self.root / "health.json"
+        health.write_text(json.dumps(prepare([parse_selection("arithmetic:1")], 7)))
+        self.initialise(health_path=str(health))
+        request = {"splits":["edit","validation","preserve","test"],"max_new_tokens":3}
+        expected = self.fixture.evaluate(request)
+        with patch.object(gpu,"MAX_EXAMPLES",1):
+            actual, _ = self.call("evaluate", **request)
+        self.assertEqual(actual["metrics"], expected["metrics"])
+        self.assertEqual(actual["behavior"], expected["behavior"])
+        state, _ = gpu._read_snapshot(self.state)
+        self.assertEqual(set(state["engine"]["probe_evaluations"]), {"edit:0","edit:1","validation:0","preserve:0"})
+        self.call("health", max_new_tokens=3)
+        self.assertEqual(gpu._read_snapshot(self.state)[0]["engine"]["probe_evaluations"], state["engine"]["probe_evaluations"])
+        report, _ = self.call("probe_activations", **self.probe_request(source="generation", row_id="edit:1"))
+        self.assertEqual(report["probes"][0]["evidence"]["contexts"][0]["row_id"], "edit:1")
+
+    def test_probe_rejects_test_rows_and_bad_bounds_before_loading_model(self):
+        self.initialise()
+        for number, change in enumerate((
+            {"contexts":[{"row_id":"test:0","source":"prompt","positions":[-1]}]},
+            {"contexts":[{"row_id":"edit:0","source":"generation","positions":[-1]}]},
+            {"contexts":[{"row_id":"edit:0","source":"prompt","positions":[True]}]},
+            {"top_k":129}, {"targets":[]},
+        ), start=9100):
+            request = {"id":number,"command":"probe_activations",**self.probe_request(),**change}
+            with patch.object(gpu,"_model_loader",side_effect=AssertionError("Invalid probe loaded a model")):
+                events = list(gpu.dispatch(str(self.state),request))
+            self.assertFalse(events[-1]["ok"])
+            self.assertNotIn("loaded a model", events[-1]["error"])
+        self.assertFalse(gpu._read_snapshot(self.state)[0]["engine"]["probe_cache"])
+
+    def test_probe_duration_is_bounded_and_shared_generation_limits_are_enforced(self):
+        from limits import space_limits
+        self.initialise()
+        with patch.object(gpu,"_model_loader",side_effect=AssertionError("Estimate loaded a model")):
+            duration = gpu.estimate_duration(str(self.state), {"command":"probe_activations", **self.probe_request()})
+        self.assertGreaterEqual(duration,20); self.assertLessEqual(duration,120)
+        self.assertEqual(gpu.MAX_NEW_TOKENS,space_limits()["max_new_tokens"])
+        self.assertEqual(gpu.MAX_SEQ_LENGTH,space_limits()["max_seq_length"])
+        with self.assertRaisesRegex(ValueError,"Space"):
+            gpu._validate_bounds({"command":"init","max_seq_length":gpu.MAX_SEQ_LENGTH+1})
+
     def test_pending_accept_and_rollback_survive_separate_allocations(self):
         self.initialise()
         self.call("edit", **proposal(self.fixture, operation="scale"))
@@ -294,6 +416,7 @@ class GPUStateTests(unittest.TestCase):
             actual, events = self.call("evaluate", **request)
         self.assertEqual(actual["samples"], expected["samples"])
         self.assertEqual(actual["metrics"], expected["metrics"])
+        self.assertEqual(actual["behavior"], expected["behavior"])
         answers = [event for event in events if event["type"] == "answer"]
         self.assertEqual([event["current"] for event in answers], [1, 2, 3, 4, 5])
         self.assertEqual({event["total"] for event in answers}, {5})

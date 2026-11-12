@@ -118,7 +118,7 @@ Goals are free-form. The frontier editor first checks whether the examples suppo
 
 ### Four small starters
 
-The Space first-use guide has four sections: **Welcome**, **Weight-space editing**, **How to use** and **Quick starters**. Sign in to Hugging Face or proceed without login. Selecting a starter fills the task, objective, dataset and runtime defaults, then opens Data for inspection. It preserves your target model and editor credentials and never starts a paid run.
+The Space first-use guide has four sections: **Welcome**, **Weight-space editing**, **How to use** and **Quick starters**. Sign in to Hugging Face or proceed without login. Selecting a starter fills the task, objective, dataset and runtime defaults, then opens Data for inspection. It preserves your target model and editor credentials. **Start experiment** then runs a real paid weight-editing hill climb with your editor API and chosen budget; selecting a card alone does not spend.
 
 - **Short maths answers:** solve simple word problems with a bare integer answer.
 - **Odd/even codes:** learn a new label convention while preserving explicit ordinary-label requests.
@@ -360,13 +360,17 @@ vespasian examples/concise.jsonl --task text-generation \
 
 API requests reserve a conservative input allowance and the maximum output cost before sending. Returned token usage settles that reservation. `--max-output-tokens` limits each API response. Requests with unknown usage keep their reservation. This is a local control based on recorded token prices, not a provider-enforced billing ceiling. Check current prices and provider account limits when the invoice amount must not exceed a fixed sum.
 
-Model-specific rates are recorded with each run. Current provider rates are listed by [OpenAI](https://developers.openai.com/api/docs/pricing) and [Anthropic](https://platform.claude.com/docs/en/about-claude/pricing). Supply `--input-price` and `--output-price` in USD per million tokens to override them or use another model. The run receipt records the applied rates.
+OpenAI requests pin the Standard service tier and 30-minute cache retention. The budget reserves cache-write and long-context premiums and reads reported cached/write usage. Missing cache details use a labelled conservative estimate; unresolved usage or an unexpected tier stops further requests. These local receipts are not an invoice guarantee.
+
+Model-specific rates are recorded with each run. Current provider rates are listed by [OpenAI](https://developers.openai.com/api/docs/pricing) and [Anthropic](https://platform.claude.com/docs/en/about-claude/pricing). Supply `--input-price` and `--output-price` in USD per million tokens to override them or use another model. Custom price overrides are flat estimates and require `--budget-policy auto`; strict mode requires known supported rates. The run receipt records the applied rates.
 
 ## How weight search works
 
 The editor examines generated answers and previous outcomes, proposes a bounded tensor operation, and receives the resulting measurements. Candidates start from the retained checkpoint. A better validation score wins. When reference loss is measured, lower loss breaks equal scores. Preservation scores stay within `--preserve-tolerance` of baseline, and preservation loss stays within a 25% increase. Rejected changes are restored exactly.
 
 Both surfaces show the recorded loop: assess the current answers, inspect the loaded model and tokenizer, explain the proposed strategy and plan, apply the bounded patch, test it, then keep or revert it. Short public rationales and reflections reference measured outcomes rather than exposing private chain-of-thought. A stage is marked complete only after its result is recorded.
+
+The editor starts with a small capability list, measured score summaries and observed behavior signals. It can inspect repetition, output-limit endings, empty answers, reference/format differences and preservation failures, then read full non-test outputs in paged chunks. These diagnostics do not replace correctness or preservation scores, and shorter wrong answers are not improvements.
 
 The editor starts with a small capability list and measured score summaries. It can read a relevant strategy guide and uses paged tools to inspect targets, tokenizer rows, rollouts and prior outcomes as needed. Essential tools are briefly described up front; strategy guides are suggestions, not a whitelist. The full tensor manifest and all strategy guides are not inserted into its prompt. Tool reads are recorded, bounded and included in frontier spending.
 
@@ -379,6 +383,7 @@ Eight operations are available when the loaded model and dataset support them:
 | `low_rank` | Adds a reproducible, seeded low-rank direction. |
 | `noise` | Adds a reproducible, seeded full-rank direction. |
 | `scale` | Multiplies the selected MLP tensor by a bounded factor. |
+| `direction_projection` | Measures a same-module output direction from selected visible contexts, optionally contrasted, then removes its projection from selected input columns of an eligible MLP weight. |
 | `token_row_scale` | Scales one to 32 inspected, non-special rows of an input embedding or output table. |
 | `token_row_interpolate` | Moves selected token rows toward inspected source rows in the same table, with a per-row norm bound. |
 | `token_row_residual` | Adds a bounded direction measured from actual linear output-head inputs and reference-token probability residuals. |
@@ -386,6 +391,12 @@ Eight operations are available when the loaded model and dataset support them:
 Token-row selectors come from the current tokenizer and non-test examples. Unsupported or ambiguous table layouts are excluded. Tied input/output tables are edited once, with their shared effect disclosed. Row edits preserve untouched rows, keep sparse rollback snapshots and measure the actual stored change, including dtype rounding. An interpolation may be reduced to satisfy the norm bound. MLP operations cannot target vocabulary tables. Residual row editing requires grounded edit-reference tokens and a supported linear output head. Preservation projection requires separate reference-bearing preservation examples; it reduces overlap with sampled keys, not all possible regressions. Both use forward passes without autograd or backpropagation.
 
 Exact ROME, MEMIT and stored-patch composition are explicitly unavailable, rather than being names for these heuristics. Forward-only exploration, contrastive alignment, preservation-aware editing and measured refinement are executable choices. The editor may stop without proposing a patch when the evidence does not justify another candidate.
+
+Activation probes are read-only forward passes over explicitly selected edit/validation/preservation row IDs, sources (prompt, reference or measured generation) and token positions. Results contain bounded statistics and state-bound direction handles, not full activation vectors. The new direction operation applies `W - strength * outer(u, mask * (u^T W))` to one inspected target, with 1–256 selected columns. It requires a handle measured on that same target and rejects changes exceeding `--max-relative-norm` after dtype rounding. Default ceiling: 0.1; reviewed range: 0.000001–1. This does not raise the bounds of other operations. Ordinary supported Linear modules can be probed; decoder-residual hooks and cross-module direction transfer are not implemented.
+
+Target-model thinking is separate from frontier-editor reasoning effort. `--thinking-mode off` preserves the starter default, `on` requires a compatible chat template, and `auto` uses the template's default. Core limits allow up to 32,768 generated tokens and 131,072 context tokens, subject to model/hardware compatibility. Set both limits explicitly for long traces; generation plus prompt must fit the context. The Space defaults to its smaller operator limits (128 generated tokens, 1,024 context tokens), shown in Advanced. This is not a promise that a long reasoning experiment fits a ZeroGPU allocation. Previously saved baselines keep their original settings.
+
+Published loop/productive excerpts test only diagnostic behavior. No real long-thinking loop repair or exact reproduction of the published experiment has been demonstrated by these tests.
 
 Each proposal names its strategy, application plan, tensors, operation, magnitude, rank and seed. It includes a brief rationale and reflection on previous measured results. The shared [strategy catalogue](docs/STRATEGIES.md) draws on inspected IWIBench traces and identifies where Vespasian’s supported operations differ from those experiments. The worker checks the proposal and measures the actual stored change. The reflective search loop takes inspiration from [GEPA](https://github.com/gepa-ai/gepa), applied here to model tensors.
 

@@ -32,6 +32,8 @@ for _worker_dir in (Path(__file__).parent / "core", Path(__file__).parent / "pyt
         sys.path.insert(0, str(_worker_dir))
         break
 from worker import Engine, load_model_components
+from limits import space_limits
+from behavior import summarize_evaluation
 
 
 SUPPORTED_MODELS = ("Qwen/Qwen3.5-0.8B", "google/gemma-3-1b-it")  # Verified shortlist, not a compatibility whitelist.
@@ -42,14 +44,17 @@ TESTED_MODELS = {
 
 MAX_EXAMPLES = int(os.environ.get("VESPASIAN_SPACE_MAX_EXAMPLES", "16"))
 MAX_TOTAL_EXAMPLES = int(os.environ.get("VESPASIAN_SPACE_MAX_TOTAL_EXAMPLES", "256"))
-MAX_NEW_TOKENS = int(os.environ.get("VESPASIAN_SPACE_MAX_NEW_TOKENS", "128"))
-MAX_SEQ_LENGTH = int(os.environ.get("VESPASIAN_SPACE_MAX_SEQ_LENGTH", "1024"))
+_LIMITS = space_limits()
+MAX_NEW_TOKENS = _LIMITS["max_new_tokens"]
+MAX_SEQ_LENGTH = _LIMITS["max_seq_length"]
 _FORMAT = 1
 _GENERATION = re.compile(r"[0-9a-f]{32}\Z")
-_COMMANDS = {"init", "inspect", "evaluate", "health", "edit", "accept", "rollback", "save", "shutdown", "patch_init", "patch_candidate", "patch_finalize", "patch_restore", "patch_export"}
+_COMMANDS = {"init", "inspect", "probe_activations", "evaluate", "health", "edit", "accept", "rollback", "save", "shutdown", "patch_init", "patch_candidate", "patch_finalize", "patch_restore", "patch_export"}
 _ENGINE_FIELDS = (
     "dataset", "pending_details", "original_hashes", "source_files", "max_seq_length",
     "device", "health_set", "dataset_mode", "seed", "inspected_token_ids", "prompt_format",
+    "thinking_mode", "max_relative_norm", "probe_state_id", "probe_cache", "probe_evaluations",
+    "probe_candidate_state_id", "probe_candidate_evaluations",
 )
 
 
@@ -281,6 +286,10 @@ def _restore_engine(metadata, tensors, emit):
                 raise ValueError("Invalid pending token-row snapshot")
             engine.row_pending[name] = {"ids": list(ids), "values": value.clone()}
     engine.pending = {name: tensors["pending." + name].clone() for name in stored["pending_names"]}
+    engine.ensure_row_ids()
+    # Tensor version counters are process-local. The private snapshot restores
+    # the associated state identity and exact values before binding this cache.
+    engine.refresh_probe_versions()
     return engine
 
 
@@ -298,6 +307,39 @@ def _validate_bounds(request, metadata=None):
         maximum = request.get("max_seq_length", 512)
         if isinstance(maximum, bool) or not isinstance(maximum, int) or maximum > MAX_SEQ_LENGTH:
             raise ValueError(f"This Space permits max_seq_length up to {MAX_SEQ_LENGTH}")
+    if command == "probe_activations":
+        targets = request.get("targets")
+        if (not isinstance(targets, list) or not 1 <= len(targets) <= 4
+                or any(not isinstance(name, str) or not name or len(name) > 2048 for name in targets)
+                or len(set(targets)) != len(targets)):
+            raise ValueError("Choose one to four distinct probe modules")
+        top_k = request.get("top_k", 64)
+        if type(top_k) is not int or not 1 <= top_k <= 128:
+            raise ValueError("Probe top_k must be between 1 and 128")
+        state = (metadata or {}).get("engine", {})
+        if state.get("pending_names") or state.get("row_pending_ids"):
+            raise ValueError("Accept or roll back the pending patch before probing activations")
+        visible = {row.get("row_id"): row for row in state.get("dataset", []) if row["split"] != "test"}
+        for key in ("contexts", "contrast_contexts"):
+            contexts = request.get(key, [] if key == "contrast_contexts" else None)
+            if not isinstance(contexts, list) or len(contexts) > 8 or (key == "contexts" and not contexts):
+                raise ValueError("Select one to eight probe contexts (contrast may be empty)")
+            for context in contexts:
+                if (not isinstance(context, dict) or set(context) != {"row_id", "source", "positions"}
+                        or not isinstance(context["row_id"], str) or len(context["row_id"]) > 64
+                        or context["source"] not in ("prompt", "reference", "generation")):
+                    raise ValueError("Invalid probe context")
+                if metadata and context["row_id"] not in visible:
+                    raise ValueError("Probe row_id is unavailable; held-out test rows are sealed")
+                positions = context["positions"]
+                if (not isinstance(positions, list) or not 1 <= len(positions) <= 32
+                        or any(type(i) is not int or not -MAX_SEQ_LENGTH <= i < MAX_SEQ_LENGTH for i in positions)
+                        or len(set(positions)) != len(positions)):
+                    raise ValueError("Choose one to 32 distinct bounded token positions")
+                if metadata and context["source"] == "generation":
+                    evaluated = state.get("probe_evaluations", {}).get(context["row_id"])
+                    if not evaluated or evaluated.get("state_id") != state.get("probe_state_id"):
+                        raise ValueError("Evaluate this visible row on the current model before probing its generation")
     if command in {"evaluate", "health"}:
         maximum = request.get("max_new_tokens", 64)
         if isinstance(maximum, bool) or not isinstance(maximum, int) or not 1 <= maximum <= MAX_NEW_TOKENS:
@@ -320,6 +362,21 @@ def estimate_duration(state_dir: str, request: dict):
     command = request.get("command")
     if command in {"inspect", "patch_init", "patch_candidate", "patch_finalize", "patch_restore", "patch_export"}:
         return 20
+    if command == "probe_activations":
+        metadata, _ = _read_metadata(Path(state_dir))
+        _validate_bounds(request, metadata)
+        state = (metadata or {}).get("engine", {})
+        rows = {row.get("row_id"): row for row in state.get("dataset", []) if row["split"] != "test"}
+        encoded = {tuple(row[:3]): (len(row[3]), len(row[4])) for row in state.get("encoded", [])}
+        tokens = 0
+        contexts = request.get("contexts", []) + request.get("contrast_contexts", [])
+        for context in contexts:
+            row = rows.get(context["row_id"], {})
+            prompt, target = encoded.get((row.get("mode", "paired"), row.get("prompt"), row.get("target")), (MAX_SEQ_LENGTH, 0))
+            if context["source"] == "generation":
+                target = len(state.get("probe_evaluations", {}).get(context["row_id"], {}).get("tokens", []))
+            tokens += prompt + (target if context["source"] != "prompt" else 0)
+        return min(120, max(20, math.ceil(15 + len(contexts) * 1.5 + tokens * 0.002)))
     if command == "save":
         return 90
     if command == "init":
@@ -340,6 +397,7 @@ def _engine_command(engine, request):
     batch = request.get("_space_batch")
     if not batch:
         return engine.dispatch(request)
+    engine.ensure_row_ids()
     original_dataset, original_health = engine.dataset, engine.health_set
     offset, count = batch["offset"], batch["count"]
     try:
@@ -402,6 +460,12 @@ def _cpu_transition(command, metadata, tensors):
     state.update(changed=sorted(changed), pending_names=[], pending_details=[],
                  row_pending_ids={}, row_current_ids=row_current,
                  row_changed={name: sorted(ids) for name, ids in row_changed.items()})
+    if command == "accept":
+        retained_id = state.get("probe_candidate_state_id") or uuid.uuid4().hex
+        retained = {key: value for key, value in state.get("probe_candidate_evaluations", {}).items()
+                    if value.get("state_id") == retained_id}
+        state.update(probe_state_id=retained_id, probe_cache={}, probe_evaluations=retained)
+    state.update(probe_candidate_state_id=None, probe_candidate_evaluations={})
     return {"accepted": True} if command == "accept" else {"restored": True}
 
 
@@ -475,7 +539,7 @@ def _execute(state_dir, request, emit, cancelled):
         metadata["model_version"] = uuid.uuid4().hex if command in {"init", "edit", "accept", "rollback", "patch_restore"} else model_version
         result = _plain({"type": "result", "id": request.get("id"), "ok": True, "data": data})
         metadata["last_request"] = {"request": request, "events": events, "result": result}
-        reuse_tensors = previous_location / "tensors.safetensors" if previous_location and command in {"inspect", "evaluate", "health", "save", "shutdown", "patch_init", "patch_candidate", "patch_finalize", "patch_export"} else None
+        reuse_tensors = previous_location / "tensors.safetensors" if previous_location and command in {"inspect", "probe_activations", "evaluate", "health", "save", "shutdown", "patch_init", "patch_candidate", "patch_finalize", "patch_export"} else None
         _commit_snapshot(directory, metadata, tensors, cancelled, reuse_tensors=reuse_tensors)
         return result
 
@@ -570,6 +634,8 @@ def _aggregate(parts):
     result = {"metrics": metrics, "samples": samples, "elapsed_seconds": elapsed}
     if parts and "rows_sha256" in parts[0]:
         result["rows_sha256"] = parts[0]["rows_sha256"]
+    elif parts and "behavior" in parts[0]:
+        result["behavior"] = summarize_evaluation(samples)
     return result
 
 

@@ -10,6 +10,8 @@ import math
 import re
 from pathlib import Path
 
+from limits import DEFAULT_MAX_NEW_TOKENS, DEFAULT_MAX_SEQ_LENGTH, DEFAULT_MAX_RELATIVE_NORM, space_limits
+
 ROOT = Path(__file__).resolve().parent
 EXAMPLES = ROOT / "examples" if (ROOT / "examples").is_dir() else ROOT.parent.parent / "examples"
 METRICS = [("Let the editor select", "auto"), ("Exact match", "exact_match"),
@@ -31,7 +33,8 @@ _BASE = {
     "dataset_config": "", "dataset_split": "train", "test_dataset_source": "",
     "test_dataset_config": "", "test_dataset_split": "test", "test_example_limit": 8,
     "prompt_field": "", "target_field": "", "text_field": "", "example_limit": 8,
-    "controls": "", "budget": 10., "max_turns": None, "reasoning_effort": "low", "max_new_tokens": 128,
+    "controls": "", "budget": 10., "max_turns": None, "reasoning_effort": "low", "max_new_tokens": DEFAULT_MAX_NEW_TOKENS,
+    "max_seq_length": DEFAULT_MAX_SEQ_LENGTH, "thinking_mode": "off", "max_relative_norm": DEFAULT_MAX_RELATIVE_NORM,
     "health_checks": ["copying"], "health_count": 4, "health_policy": "track",
     "health_limit_pp": 10., "save_trajectory": True,
 }
@@ -228,6 +231,18 @@ def editor_pricing(provider, model, input_price=None, output_price=None):
     return {"input_per_million": incoming, "output_per_million": outgoing, "known": rates is not None}
 
 
+def strict_pricing_errors(provider, model, input_price=None, output_price=None):
+    """The Space always reserves cost in strict mode; estimates belong in the CLI."""
+    errors = {}
+    route = "For custom-price estimates, use the terminal with --budget-policy auto; estimated spending is not a strict cap."
+    if model not in EDITOR_RATES.get(provider, {}):
+        errors["editor_model"] = "Choose a listed model for this provider. The Space requires supported strict-budget pricing. " + route
+    for key, value in (("input_price", input_price), ("output_price", output_price)):
+        if value is not None and not (isinstance(value, str) and not value.strip()):
+            errors[key] = "The Space does not accept token-price overrides under its strict budget policy. Reselect a listed editor model to clear saved overrides. " + route
+    return errors
+
+
 def choose_editor(provider, current=None, remembered=None):
     memory = dict(remembered or {})
     old_provider = memory.pop("_provider", None)
@@ -342,11 +357,18 @@ def validate_step(config, step, preview=None, test_preview=None):
             _range(errors, config, "max_turns", 1, 4294967295, "the maximum edit turns", integer=True)
         if config.get("reasoning_effort", "low") not in {"low", "medium", "high"}:
             errors["reasoning_effort"] = "Choose a supported reasoning effort."
-        _range(errors, config, "max_new_tokens", 1, 128, "maximum generated tokens", integer=True)
-        prices = editor_pricing(provider, config.get("editor_model"), config.get("input_price"), config.get("output_price"))
-        for key, rate in (("input_price", prices["input_per_million"]), ("output_price", prices["output_per_million"])):
-            if rate is None or rate <= 0:
-                errors[key] = "Set a positive USD price per million tokens for this model."
+        limits = space_limits()
+        generation = {"max_new_tokens": DEFAULT_MAX_NEW_TOKENS, "max_seq_length": DEFAULT_MAX_SEQ_LENGTH, **config}
+        _range(errors, generation, "max_new_tokens", 1, limits["max_new_tokens"], "maximum generated tokens", integer=True)
+        _range(errors, generation, "max_seq_length", 32, limits["max_seq_length"], "maximum sequence tokens", integer=True)
+        if config.get("thinking_mode", "off") not in {"off", "on", "auto"}:
+            errors["thinking_mode"] = "Choose target thinking off, on or auto."
+        elif config.get("thinking_mode", "off") == "on" and config.get("prompt_format", "auto") == "plain":
+            errors["thinking_mode"] = "Target thinking on requires a compatible chat template, not plain prompts."
+        relative_norm = _number(config.get("max_relative_norm", DEFAULT_MAX_RELATIVE_NORM))
+        if relative_norm is None or not 1e-6 <= relative_norm <= 1:
+            errors["max_relative_norm"] = "Set the reviewed direction-edit relative norm cap between 0.000001 and 1."
+        errors.update(strict_pricing_errors(provider, config.get("editor_model"), config.get("input_price"), config.get("output_price")))
     else:
         raise ValueError("Unknown setup step")
     return errors
@@ -397,11 +419,13 @@ def review_html(config, preview=None, test_preview=None):
         ("Editor model", config.get("editor_model")), ("Patch backup", config.get("patch_repo") if config.get("patch_backup") else "Local/download only; temporary Space storage"),
         ("Editor budget", f"${budget:.2f} USD" if budget is not None else "Choose a budget"),
         ("Maximum edit turns", config.get("max_turns") or "No turn cap · spending limit applies"),
-        ("Reasoning effort", config.get("reasoning_effort", "low")),
+        ("Editor reasoning effort", config.get("reasoning_effort", "low")),
+        ("Target thinking", config.get("thinking_mode", "off")),
+        ("Direction-edit relative norm cap", config.get("max_relative_norm", DEFAULT_MAX_RELATIVE_NORM)),
         ("Answer token limit", config.get("max_new_tokens", 128)),
-        ("Sequence token limit", 1024), ("Seed", 42),
+        ("Sequence token limit", config.get("max_seq_length", DEFAULT_MAX_SEQ_LENGTH)), ("Seed", 42),
         ("Editor output token limit", 2048), ("Preservation tolerance", 0),
     ]
     rows = "".join(f'<div><dt>{esc(label)}</dt><dd>{esc(value)}</dd></div>' for label, value in entries)
     return (f'<section class="vs-review-summary"><h3>Experiment details</h3><p class="vs-review-goal">{esc(config.get("goal"))}</p>'
-            f'<dl>{rows}</dl><p class="vs-inline-note">The editor budget covers frontier API calls. GPU quota is accounted for separately.</p></section>')
+            f'<dl>{rows}</dl><p class="vs-inline-note">The editor budget covers frontier API calls. GPU quota is separate. Generation limits include target thinking tokens; capped output may be truncated, not a completed answer. The relative norm cap bounds the new direction edit; other edits retain their own safeguards.</p></section>')

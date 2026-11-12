@@ -42,6 +42,9 @@ class AppRequestTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.controls["max_turns"].value, "")
         self.assertEqual(self.controls["reasoning_effort"].value, "low")
         self.assertIn("reasoning_effort", self.app.FIELDS)
+        for field, value in (("thinking_mode", "off"), ("max_seq_length", 1024), ("max_relative_norm", 0.1)):
+            self.assertIn(field, self.app.FIELDS)
+            self.assertEqual(self.controls[field].value, value)
         self.assertEqual(self.app.parse_selection({"turn": 75})["turn"], None)
         self.assertEqual(self.app.parse_selection('{"turn": 75}')["turn"], 75)
 
@@ -55,6 +58,23 @@ class AppRequestTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.controls["patch_backup"].value)
         self.assertFalse(self.controls["patch_create"].value)
         self.assertEqual(self.controls["save_format"].value, "model")
+
+    def test_inspection_controls_use_operator_limits_and_live_in_advanced(self):
+        for field in ("thinking_mode", "max_new_tokens", "max_seq_length", "max_relative_norm"):
+            ancestor = self.controls[field].parent
+            while ancestor is not None and getattr(ancestor, "elem_id", None) != "vs-advanced-runtime":
+                ancestor = getattr(ancestor, "parent", None)
+            self.assertIsNotNone(ancestor, field)
+            self.assertFalse(ancestor.open)
+        with patch.dict(os.environ, {"VESPASIAN_SPACE_MAX_NEW_TOKENS": "32768", "VESPASIAN_SPACE_MAX_SEQ_LENGTH": "131072"}):
+            demo, controls = self.app.build_ui()
+        self.assertEqual(controls["max_new_tokens"].maximum, 32768)
+        self.assertEqual(controls["max_seq_length"].maximum, 131072)
+        self.assertEqual(controls["max_new_tokens"].value, 128)
+        self.assertEqual(controls["max_seq_length"].value, 1024)
+        markup = " ".join(str(getattr(block, "value", "")) for block in demo.blocks.values())
+        self.assertIn("32,768 generated tokens", markup)
+        self.assertIn("do not guarantee long runs fit ZeroGPU", markup)
 
     async def test_private_patch_save_requires_explicit_consent(self):
         run, state = self.fixture_run(finished=True)
@@ -111,8 +131,7 @@ class AppRequestTests(unittest.IsolatedAsyncioTestCase):
         model.value = "google/gemma-3-1b-it"
         try:
             result = (await self.call(function, self.request(), self.inputs(function, {"preset": "greetings"})))[0]
-            update = self.returned(function, result, "model")
-            self.assertNotIn("value", update)
+            self.assertNotIn(self.controls["model"], function.outputs)
             self.assertEqual(model.value, "google/gemma-3-1b-it")
         finally:
             model.value = before
@@ -136,8 +155,69 @@ class AppRequestTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(self.returned(function, result, "patch_backup"))
                 self.assertFalse(self.returned(function, result, "patch_create"))
                 for name in ("model", "editor", "editor_model", "api_key", "hf_token"):
-                    self.assertNotIn("value", self.returned(function, result, name))
+                    self.assertNotIn(self.controls[name], function.outputs)
             begin.assert_not_called()
+
+    async def test_each_quick_starter_starts_the_normal_paid_hill_climb(self):
+        for card in self.app.setup.quick_starter_cards():
+            with self.subTest(starter=card["id"]):
+                loader = self.callback("starter_submit", name="load_quick_starter")
+                loaded = (await self.call(loader, self.request(), self.inputs(loader, {"starter_input": card["id"]})))[0]
+                file_data = self.returned(loader, loaded, "dataset_file")
+                config = self.app.setup.preset_config(card["id"])
+                config["dataset_file"] = file_data["path"]
+                config.update(editor="openai", editor_model="gpt-6.1-sol", api_key="fixture-editor-key")
+                preview = self.app.hub.preview_upload(config["dataset_file"], config)
+                self.assertIsNone(preview["error"])
+                preview.update(_current=True, _fingerprint=self.app.setup.fingerprint(config))
+                config.update(preview_state=preview, test_preview_state={})
+                run, _ = self.fixture_run()
+                with patch.object(self.app.runtime, "begin", return_value=run) as begin:
+                    result = (await self.call("run", self.request(), self.inputs("run", {**config, "dataset_file": file_data})))[0]
+                begin.assert_called_once()
+                run.start.assert_called_once()
+                started = begin.call_args.args[1]
+                self.assertEqual(started["dataset_file"], config["dataset_file"])
+                for key in ("goal", "hf_task", "metric", "max_new_tokens", "example_limit"):
+                    self.assertEqual(started[key], config[key])
+                self.assertEqual(started["budget"], 10)
+                self.assertIsNone(started["max_turns"])
+                self.assertEqual(started["reasoning_effort"], "low")
+                self.assertEqual(started["thinking_mode"], "off")
+                self.assertEqual(started["max_seq_length"], 1024)
+                self.assertEqual(started["max_relative_norm"], 0.1)
+                self.assertEqual(started["editor"], "openai")
+                self.assertEqual(started["api_key"], "fixture-editor-key")
+                self.assertTrue(started["save_trajectory"])
+                self.assertFalse(started["patch_backup"])
+                self.assertNotIn("fixture-editor-key", json.dumps(result["data"]))
+
+    async def test_reviewed_inspection_settings_survive_starting_run(self):
+        loader = self.callback("starter_submit", name="load_quick_starter")
+        loaded = (await self.call(loader, self.request(), self.inputs(loader, {"starter_input": "parity"})))[0]
+        file_data = self.returned(loader, loaded, "dataset_file")
+        config = self.app.setup.preset_config("parity")
+        config.update(dataset_file=file_data["path"], editor="openai", editor_model="gpt-6.1-sol",
+                      api_key="fixture-editor-key", thinking_mode="on", max_new_tokens=128,
+                      max_seq_length=512, max_relative_norm=0.25, reasoning_effort="low")
+        preview = self.app.hub.preview_upload(config["dataset_file"], config)
+        preview.update(_current=True, _fingerprint=self.app.setup.fingerprint(config))
+        config.update(preview_state=preview, test_preview_state={})
+        run, _ = self.fixture_run()
+        with patch.object(self.app.runtime, "begin", return_value=run) as begin:
+            await self.call("run", self.request(), self.inputs("run", {**config, "dataset_file": file_data}))
+        begin.assert_called_once()
+        started = begin.call_args.args[1]
+        for field in ("thinking_mode", "max_new_tokens", "max_seq_length", "max_relative_norm", "reasoning_effort"):
+            self.assertEqual(started[field], config[field])
+        for field in ("thinking_mode", "max_new_tokens", "max_seq_length", "max_relative_norm"):
+            self.assertIn('data-vs-focus="#' + self.app.STEP_FIELDS[field] + '"', self.app.error_html({field: "Invalid value"}))
+
+    async def test_preset_output_graph_cannot_replace_credentials_or_selected_model(self):
+        for source, event, name in [("starter_submit", "click", "load_quick_starter"), ("preset", "input", "preset_changed")]:
+            function = self.callback(source, event, name=name)
+            for field in ("model", "editor", "editor_model", "api_key", "hf_token", "input_price", "output_price"):
+                self.assertNotIn(self.controls[field], function.outputs)
 
     async def test_invalid_quick_starter_preserves_every_setting(self):
         function = self.callback("starter_submit", name="load_quick_starter")
@@ -145,7 +225,8 @@ class AppRequestTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("No settings were changed", self.returned(function, result, "starter_status"))
         self.assertNotIn("<script>", self.returned(function, result, "starter_status"))
         for name in self.app.FIELDS:
-            self.assertNotIn("value", self.returned(function, result, name))
+            if self.controls[name] in function.outputs:
+                self.assertNotIn("value", self.returned(function, result, name))
 
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -427,6 +508,21 @@ class AppRequestTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("$2",text)
         self.assertIn("$10",text)
         self.assertNotIn("None",text)
+
+    async def test_unsupported_pricing_is_explained_without_editing_credentials(self):
+        function = self.callback("editor_model", "change", "pricing")
+        for updates in ({"editor_model": "custom-editor"}, {"input_price": 2}, {"output_price": 10},
+                        {"editor": "anthropic", "editor_model": "gpt-6.1-sol"}):
+            values = {"editor": "openai", "editor_model": "gpt-6.1-sol", "input_price": "", "output_price": "", **updates}
+            result = (await self.call(function, self.request(), self.inputs(function, values)))[0]
+            message = self.returned(function, result, "pricing_html")
+            self.assertIn("--budget-policy auto", message)
+            self.assertIn("strict", message)
+            self.assertNotIn("Add input and output", message)
+        for name in ("api_key", "editor", "editor_model"):
+            self.assertNotIn(self.controls[name], function.outputs)
+        for name in ("input_price", "output_price"):
+            self.assertFalse(self.controls[name].visible)
 
     async def test_provider_switch_remembers_model_and_clears_credentials_and_overrides(self):
         function = self.callback("editor", "input", "editor_changed")

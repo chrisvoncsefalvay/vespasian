@@ -28,9 +28,9 @@ cargo package --locked
 Commit the version, then tag and push it:
 
 ```sh
-git tag -a v0.2.0 -m 'Vespasian 0.2.0'
+git tag -a v0.3.0 -m 'Vespasian 0.3.0'
 git push origin main
-git push origin v0.2.0
+git push origin v0.3.0
 ```
 
 ## Build the release
@@ -39,23 +39,23 @@ The **Release** workflow runs the full test matrix, builds native binaries, pack
 
 | Platform | Release asset |
 | --- | --- |
-| Linux x64 | `vespasian-0.2.0-x86_64-unknown-linux-gnu.tar.gz` |
-| Linux ARM64 | `vespasian-0.2.0-aarch64-unknown-linux-gnu.tar.gz` |
-| macOS Apple Silicon | `vespasian-0.2.0-aarch64-apple-darwin.tar.gz` |
-| Windows x64 | `vespasian-0.2.0-x86_64-pc-windows-msvc.zip` |
-| Windows ARM64 | `vespasian-0.2.0-aarch64-pc-windows-msvc.zip` |
+| Linux x64 | `vespasian-0.3.0-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux ARM64 | `vespasian-0.3.0-aarch64-unknown-linux-gnu.tar.gz` |
+| macOS Apple Silicon | `vespasian-0.3.0-aarch64-apple-darwin.tar.gz` |
+| Windows x64 | `vespasian-0.3.0-x86_64-pc-windows-msvc.zip` |
+| Windows ARM64 | `vespasian-0.3.0-aarch64-pc-windows-msvc.zip` |
 
-Each archive contains a `vespasian-0.2.0` directory with the executable, examples and documentation. Windows ARM64 uses an x64 Python runtime through [Windows emulation supported by uv](https://docs.astral.sh/uv/concepts/python-versions/#transparent-x86_64-emulation-on-aarch64).
+Each archive contains a `vespasian-0.3.0` directory with the executable, examples and documentation. Windows ARM64 uses an x64 Python runtime through [Windows emulation supported by uv](https://docs.astral.sh/uv/concepts/python-versions/#transparent-x86_64-emulation-on-aarch64).
 
-The draft includes `vespasian-0.2.0.crate`, `SHA256SUMS.txt` and `release.json`. The manifest joins all five platform archives and the crate to the same Git commit. Packaging checks executable architecture, version and file hashes.
+The draft includes `vespasian-0.3.0.crate`, `SHA256SUMS.txt` and `release.json`. The manifest joins all five platform archives and the crate to the same Git commit. Packaging checks executable architecture, version and file hashes.
 
 Download the draft assets, check their hashes, and run the extracted executable:
 
 ```sh
 sha256sum --check SHA256SUMS.txt
-./vespasian-0.2.0/vespasian --version
-./vespasian-0.2.0/vespasian setup
-./vespasian-0.2.0/vespasian doctor
+./vespasian-0.3.0/vespasian --version
+./vespasian-0.3.0/vespasian setup
+./vespasian-0.3.0/vespasian doctor
 ```
 
 On macOS use `shasum -a 256 -c SHA256SUMS.txt`. On Windows use `Get-FileHash -Algorithm SHA256` and run `vespasian.exe`. Select **Publish release** after checking the draft assets and release notes.
@@ -78,6 +78,6 @@ Revoke the initial token and remove its GitHub secret. For later versions, selec
 Confirm installation from the registry:
 
 ```sh
-cargo install vespasian --locked --version 0.2.0
+cargo install vespasian --locked --version 0.3.0
 vespasian --version
 ```

@@ -13,6 +13,7 @@ from pathlib import Path
 import random
 import sys
 import time
+import uuid
 from typing import Any
 
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -150,6 +151,14 @@ class Engine:
         self.inspected_token_ids: list[int] = []
         self.row_pending: dict[str, dict] = {}
         self.row_changed: dict[str, set[int]] = {}
+        self.thinking_mode = "off"
+        self.max_relative_norm = 0.1
+        self.probe_state_id = uuid.uuid4().hex
+        self.probe_cache: dict[str, dict] = {}
+        self.probe_evaluations: dict[str, dict] = {}
+        self.probe_candidate_evaluations: dict[str, dict] = {}
+        self.probe_candidate_state_id = None
+        self._probe_versions = None
 
     def progress(self, phase: str, message: str, current=0, total=0, *, label=None, turn=None):
         event = {"type": "progress", "phase": phase, "message": message, "current": current, "total": total}
@@ -233,9 +242,18 @@ class Engine:
         if not counts["edit"] or not counts["validation"]:
             raise ValueError("The dataset needs edit and validation examples")
         self.dataset = rows
+        self.ensure_row_ids()
         self.dataset_mode = dataset_mode or "paired"
         self.encoded.clear()
         return dict(counts)
+
+    def ensure_row_ids(self):
+        counts = collections.Counter()
+        for row in self.dataset:
+            split = row["split"]
+            if split != "test":
+                row.setdefault("row_id", f"{split}:{counts[split]}")
+                counts[split] += 1
 
     def reference_edits(self):
         return [row for row in self.dataset if row["split"] == "edit" and row.get("mode", "paired") != "prompts"]
@@ -249,7 +267,7 @@ class Engine:
         return type(head) is torch.nn.Linear and bool(self.reference_edits())
 
     def allowed_operations(self):
-        operations = ["scale", "low_rank", "noise"] if self.editable else []
+        operations = ["scale", "low_rank", "noise", "direction_projection"] if self.editable else []
         if self.editable and all(row.get("mode", "paired") != "prompts" for row in self.dataset if row["split"] == "edit"):
             operations.append("activation_rank_one")
             if self.reference_edits() and self.preservation_rows():
@@ -354,7 +372,9 @@ class Engine:
             if all(math.isfinite(value) for value in norms.values()):
                 candidates.append({**self.token_description(token_id), "row_norms": norms, "edit_reference": token_id in reference_ids})
         self.inspected_token_ids = [row["id"] for row in candidates]
-        return {"token_tables": copy.deepcopy(self.token_table_info), "token_candidates": candidates,
+        import probes
+        return {"probe_modules": probes.catalogue(self), "max_relative_norm": self.max_relative_norm,
+                "token_tables": copy.deepcopy(self.token_table_info), "token_candidates": candidates,
                 "editable": self.editable_catalogue(), "allowed_operations": self.allowed_operations(),
                 "dataset_mode": self.dataset_mode, "tokenizer_class": type(self.tokenizer).__name__,
                 "policy": "Token pieces are tokenizer-specific. Test rows are sealed. Shared tables affect every listed role. Interpolation is bounded by each original row's norm.",
@@ -376,7 +396,17 @@ class Engine:
         else:
             if not callable(getattr(self.tokenizer, "apply_chat_template", None)) or (hasattr(self.tokenizer, "chat_template") and not self.tokenizer.chat_template):
                 raise ValueError("This tokenizer has no chat template. Explicitly choose prompt_format=plain for completion-style prompts, or choose a chat model")
-            tokens = self.tokenizer.apply_chat_template([{"role": "user", "content": text}], tokenize=True, add_generation_prompt=True, enable_thinking=False)
+            options = {}
+            if self.thinking_mode != "auto":
+                if self.thinking_mode == "on":
+                    template = getattr(self.tokenizer, "chat_template", None)
+                    getter = getattr(self.tokenizer, "get_chat_template", None)
+                    if callable(getter):
+                        template = getter()
+                    if not isinstance(template, str) or "enable_thinking" not in template:
+                        raise ValueError("This chat template does not expose enable_thinking; thinking_mode=on is unavailable")
+                options["enable_thinking"] = self.thinking_mode == "on"
+            tokens = self.tokenizer.apply_chat_template([{"role": "user", "content": text}], tokenize=True, add_generation_prompt=True, **options)
             if hasattr(tokens, "input_ids"):
                 tokens = tokens.input_ids
             if isinstance(tokens, dict):
@@ -388,7 +418,7 @@ class Engine:
     def generation_policy(self):
         if self.dataset_mode == "corpus":
             return {"conditioning": "unconditional", "do_sample": True, "temperature": 0.8, "top_p": 0.95, "top_k": 0, "seed_policy": "run seed plus stable reference hash", "start_token_id": self.start_token()}
-        return {"conditioning": "plain_prompt" if self.prompt_format == "plain" else "chat_prompt", "do_sample": False}
+        return {"conditioning": "plain_prompt" if self.prompt_format == "plain" else "chat_prompt", "do_sample": False, "thinking_mode": self.thinking_mode}
 
     def start_token(self):
         config = getattr(self.model.config, "text_config", self.model.config)
@@ -409,7 +439,13 @@ class Engine:
         self.prompt_format = request.get("prompt_format", "auto")
         if self.prompt_format not in {"auto", "chat", "plain"}:
             raise ValueError("prompt_format must be auto, chat or plain")
-        self.max_seq_length = bounded_int(request.get("max_seq_length", 512), "max_seq_length", 16, 16384)
+        self.thinking_mode = request.get("thinking_mode", "off")
+        if self.thinking_mode not in {"off", "on", "auto"}:
+            raise ValueError("thinking_mode must be off, on or auto")
+        if self.thinking_mode == "on" and self.prompt_format == "plain":
+            raise ValueError("thinking_mode=on requires a compatible chat template")
+        self.max_relative_norm = bounded_float(request.get("max_relative_norm", 0.1), "max_relative_norm", 0.000001, 1.0)
+        self.max_seq_length = bounded_int(request.get("max_seq_length", 512), "max_seq_length", 16, 131072)
         seed = bounded_int(request.get("seed", 42), "seed", 0, 2**32 - 1)
         self.seed = seed
         random.seed(seed)
@@ -424,6 +460,8 @@ class Engine:
         if self.device == "cuda" and not torch.cuda.is_available():
             raise ValueError("CUDA is unavailable. Choose --device cpu or install CUDA-enabled PyTorch")
         counts = self.load_dataset(request["dataset"])
+        if self.thinking_mode == "on" and self.dataset_mode == "corpus":
+            raise ValueError("thinking_mode=on requires chat prompts; unconditional corpus generation has no chat template")
         identifier = request["model"]
         if not isinstance(identifier, str) or not identifier.strip():
             raise ValueError("Model identifier must contain text")
@@ -458,7 +496,21 @@ class Engine:
         if request.get("health_path"):
             self.load_health(request["health_path"])
         self.progress("loading", "Model ready", 1, 1)
-        return {"model": identifier, "dataset_mode": self.dataset_mode, "allowed_operations": self.allowed_operations(), "generation": self.generation_policy(), "revision": resolved_revision, "device": self.device, "dtype": str(dtype).replace("torch.", ""), **structure, "editable": self.editable_catalogue(), "token_tables": copy.deepcopy(self.token_table_info), "counts": counts, "source": {"path": str(self.source_dir) if self.source_dir else None, "files": self.source_files}, "seed": seed, "prompt_format": self.prompt_format, "runtime": {"torch": torch.__version__, "transformers": __import__("transformers").__version__}}
+        return {"model": identifier, "dataset_mode": self.dataset_mode, "allowed_operations": self.allowed_operations(), "generation": self.generation_policy(), "revision": resolved_revision, "device": self.device, "dtype": str(dtype).replace("torch.", ""), **structure, "editable": self.editable_catalogue(), "token_tables": copy.deepcopy(self.token_table_info), "counts": counts, "source": {"path": str(self.source_dir) if self.source_dir else None, "files": self.source_files}, "seed": seed, "prompt_format": self.prompt_format, "thinking_mode": self.thinking_mode, "max_relative_norm": self.max_relative_norm, "runtime": {"torch": torch.__version__, "transformers": __import__("transformers").__version__}}
+
+    def context_limit(self):
+        # Model families differ in rotary scaling and effective context limits.
+        # Respect the explicit run/platform bound; unsupported lengths fail in
+        # the model rather than guessing support from one config attribute.
+        return self.max_seq_length
+
+    def refresh_probe_versions(self):
+        import probes
+        probes.refresh(self)
+
+    def probe_activations(self, request):
+        import probes
+        return probes.measure(self, request)
 
     def encode(self, row: dict) -> tuple[list[int], list[int]]:
         mode = row.get("mode", "paired")
@@ -480,7 +532,7 @@ class Engine:
             target.append(eos)
         if not prompt or (mode != "prompts" and not target):
             raise ValueError("An example produced an empty prompt or target")
-        if len(prompt) + len(target) > self.max_seq_length:
+        if len(prompt) + len(target) > self.context_limit():
             raise ValueError(f"Example exceeds --max-seq-length ({len(prompt) + len(target)} tokens): {row['prompt'][:80]}")
         self.encoded[key] = (prompt, target)
         return prompt, target
@@ -502,7 +554,8 @@ class Engine:
         splits = request.get("splits", ["validation", "preserve"])
         if not isinstance(splits, list) or not splits or len(set(splits)) != len(splits) or any(split not in {"edit", "validation", "preserve", "test"} for split in splits):
             raise ValueError("Evaluation splits must be a nonempty list of distinct split names")
-        maximum = bounded_int(request.get("max_new_tokens", 64), "max_new_tokens", 1, 2048)
+        maximum = bounded_int(request.get("max_new_tokens", 64), "max_new_tokens", 1, 32768)
+        self.ensure_row_ids()
         rows = [row for row in self.dataset if row["split"] in splits]
         metrics: dict[str, dict] = {}
         samples = []
@@ -514,7 +567,7 @@ class Engine:
             for index, row in enumerate(rows, 1):
                 mode = row.get("mode", "paired")
                 prompt, _ = self.encode(row)
-                if len(prompt) + maximum > self.max_seq_length:
+                if len(prompt) + maximum > self.context_limit():
                     raise ValueError(f"Prompt plus --max-new-tokens exceeds --max-seq-length: {row['prompt'][:80]}")
                 input_ids = torch.tensor([prompt], dtype=torch.long, device=self.device)
                 arguments = {"input_ids": input_ids, "attention_mask": torch.ones_like(input_ids), "max_new_tokens": maximum, "do_sample": False, "num_beams": 1, "use_cache": True, "pad_token_id": self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id}
@@ -548,6 +601,9 @@ class Engine:
                 for key, value in measured.items():
                     totals[key] += float(value)
                 sample = {**row, "prediction": prediction, **measured, "generated_tokens": len(generated), "token_ids": generated, "finish_reason": finish_reason, **generation}
+                if row["split"] != "test":
+                    from behavior import annotate_samples
+                    sample = annotate_samples([sample], row_ids=[row["row_id"]])[0]
                 samples.append(sample)
                 self.answer("evaluating", label, turn, index, len(rows), sample)
                 self.progress("evaluating", f"{label} · {row['split']} {index}/{len(rows)}", index, len(rows), label=label, turn=turn)
@@ -556,7 +612,10 @@ class Engine:
                 if key in totals:
                     totals[key] /= totals["count"]
         self.progress("evaluating", "Evaluation complete", len(rows), len(rows), label=label, turn=turn)
-        return {"metrics": metrics, "samples": samples, "elapsed_seconds": time.monotonic() - started}
+        from behavior import summarize_evaluation
+        import probes
+        probes.cache_evaluation(self, samples)
+        return {"metrics": metrics, "samples": samples, "behavior": summarize_evaluation(samples), "elapsed_seconds": time.monotonic() - started}
 
     def load_health(self, path: str):
         from health import validate_manifest
@@ -598,7 +657,7 @@ class Engine:
             raise ValueError("This run has no health checks")
         import torch
         from health import score
-        maximum = bounded_int(request.get("max_new_tokens", 64), "max_new_tokens", 1, 2048)
+        maximum = bounded_int(request.get("max_new_tokens", 64), "max_new_tokens", 1, 32768)
         metrics = {item["check"]: {"label": item["label"], "metric": item["metric"], "score": 0.0, "count": 0} for item in self.health_set["checks"]}
         samples = []
         rows = self.health_set["rows"]
@@ -613,7 +672,7 @@ class Engine:
                     detail = {"choice_logprobs": likelihoods, "choice_token_ids": choice_tokens, "finish_reason": "choice"}
                 else:
                     prompt = self.health_prompt(row["prompt"])
-                    if len(prompt) + maximum > self.max_seq_length:
+                    if len(prompt) + maximum > self.context_limit():
                         raise ValueError("A health prompt plus --max-new-tokens exceeds --max-seq-length. Increase the context limit")
                     inputs = torch.tensor([prompt], dtype=torch.long, device=self.device)
                     output = self.model.generate(input_ids=inputs, attention_mask=torch.ones_like(inputs), max_new_tokens=maximum, do_sample=False, num_beams=1, use_cache=True, pad_token_id=self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id)
@@ -638,7 +697,7 @@ class Engine:
     def validate_proposal(self, proposal: dict):
         required = {"targets", "operation", "strength", "rank", "seed", "rationale"}
         explanatory = {"strategy", "plan", "reflection"}
-        selectors = {"token_ids", "source_token_ids"}
+        selectors = {"token_ids", "source_token_ids", "direction_id", "columns"}
         if not isinstance(proposal, dict) or not required.issubset(proposal) or set(proposal) - required - explanatory - selectors:
             raise ValueError("Edit proposal must contain targets, operation, strength, rank, seed and rationale; only strategy, plan and reflection may be added")
         # Historical trajectories predate these public decision summaries. Keep
@@ -670,11 +729,19 @@ class Engine:
         if not isinstance(proposal["rationale"], str) or not proposal["rationale"].strip():
             raise ValueError("Edit proposal requires a rationale")
         operation = proposal["operation"]
-        if operation not in {"scale", "low_rank", "noise", "activation_rank_one", "activation_preserve", "token_row_scale", "token_row_interpolate", "token_row_residual"}:
+        if operation not in {"scale", "low_rank", "noise", "activation_rank_one", "activation_preserve", "token_row_scale", "token_row_interpolate", "token_row_residual", "direction_projection"}:
             raise ValueError("Unknown tensor operation")
         if operation not in self.allowed_operations():
             raise ValueError("Activation surgery requires reference text. Choose scale, low_rank or noise for prompt-only data")
-        strength = bounded_float(proposal["strength"], "strength", -0.1, 0.1)
+        projection = operation == "direction_projection"
+        if projection:
+            if len(targets) != 1 or proposal["rank"] != 1:
+                raise ValueError("Direction projection selects exactly one tensor and rank one")
+            import probes
+            probes.selected_direction(self, proposal)
+        elif proposal.get("direction_id") not in (None, "") or proposal.get("columns", []) != []:
+            raise ValueError("Only direction_projection accepts direction_id and columns")
+        strength = bounded_float(proposal["strength"], "strength", 0.000001 if projection else -0.1, 16.0 if projection else 0.1)
         if abs(strength) < 1e-6:
             raise ValueError("Strength must have an absolute value of at least 0.000001")
         if operation in {"token_row_interpolate", "token_row_residual", "activation_preserve"} and strength <= 0:
@@ -905,8 +972,12 @@ class Engine:
         if self.pending or self.row_pending:
             raise ValueError("Accept or roll back the previous edit before starting another")
         targets, operation, strength, rank, seed = self.validate_proposal(request["proposal"])
+        self.probe_candidate_state_id = uuid.uuid4().hex
+        self.probe_candidate_evaluations.clear()
         if operation.startswith("token_row_"):
             return self.edit_token_rows(request["proposal"], strength, rank, seed)
+        import probes
+        selected = probes.selected_direction(self, request["proposal"]) if operation == "direction_projection" else None
         self.pending = {name: self.editable[name].detach().cpu().clone() for name in targets}
         started = time.monotonic()
         details = []
@@ -921,7 +992,13 @@ class Engine:
                     if norm == 0 or not math.isfinite(norm):
                         raise ValueError("Editable tensors must have finite, nonzero norms")
                     generator = torch.Generator(device=parameter.device).manual_seed(seed + index)
-                    if operation == "scale":
+                    if operation == "direction_projection":
+                        direction, columns, evidence = selected
+                        column_ids = torch.tensor(columns, device=parameter.device)
+                        delta = torch.zeros_like(original)
+                        selected_values = original.index_select(1, column_ids)
+                        delta[:, column_ids] = -strength * torch.outer(direction, direction @ selected_values)
+                    elif operation == "scale":
                         delta = original * strength
                     elif operation in {"activation_rank_one", "activation_preserve"}:
                         delta = activation_directions[name] * (strength * norm)
@@ -935,9 +1012,11 @@ class Engine:
                     else:
                         delta = torch.randn(parameter.shape, device=parameter.device, dtype=torch.float32, generator=generator)
                         delta *= strength * norm / torch.linalg.vector_norm(delta)
-                    radius = norm * abs(strength)
+                    radius = norm * (self.max_relative_norm if operation == "direction_projection" else abs(strength))
                     parameter.copy_(original + delta)
                     measured = torch.linalg.vector_norm(parameter.float() - original)
+                    if operation == "direction_projection" and measured > radius:
+                        raise ValueError("Direction projection exceeds the configured max_relative_norm; select fewer columns or a smaller strength")
                     # The bound applies to stored weights, including BF16 rounding.
                     for _ in range(24):
                         if measured <= radius:
@@ -951,8 +1030,11 @@ class Engine:
                     if not torch.isfinite(parameter).all():
                         raise ValueError("The edit produced nonfinite weights")
                     detail = {"name": name, "relative_norm": float(measured.item()) / norm, "shape": list(parameter.shape), "changed_elements": int(torch.count_nonzero(parameter.detach().cpu() != self.pending[name]).item())}
-                    if operation == "activation_preserve" and detail["changed_elements"] == 0:
+                    if operation in {"activation_preserve", "direction_projection"} and detail["changed_elements"] == 0:
                         raise ValueError("Preservation-aware direction rounds to an empty stored update")
+                    if operation == "direction_projection":
+                        detail.update({"direction_id": request["proposal"]["direction_id"], "columns": list(columns),
+                                       "max_relative_norm": self.max_relative_norm, "direction_evidence": evidence})
                     if operation == "activation_preserve":
                         detail["direction_evidence"] = copy.deepcopy(self.direction_evidence)
                     details.append(detail)
@@ -982,6 +1064,8 @@ class Engine:
         self.changed.update(name for name, value in self.pending.items() if not __import__("torch").equal(value, self.editable[name].detach().cpu()))
         self.pending.clear()
         self.pending_details = []
+        import probes
+        probes.accept_candidate(self)
         return {"accepted": True}
 
     def rollback(self, request: dict):
@@ -998,6 +1082,9 @@ class Engine:
         self.pending_details = []
         self.model.requires_grad_(False)
         self.model.zero_grad(set_to_none=True)
+        self.probe_candidate_evaluations.clear()
+        self.probe_candidate_state_id = None
+        self.refresh_probe_versions()
         return {"restored": True}
 
     @staticmethod
@@ -1042,7 +1129,10 @@ class Engine:
         if command == "patch_finalize":
             return patches.finalize(directory, request["turn"], request["accepted"])
         if command == "patch_restore":
-            return patches.restore(self, directory, request.get("which", "best"))
+            result = patches.restore(self, directory, request.get("which", "best"))
+            import probes
+            probes.invalidate(self)
+            return result
         if command == "patch_export":
             return patches.export_bundle(directory, request["path"])
         raise ValueError("Unknown patch command")
@@ -1051,7 +1141,7 @@ class Engine:
         command = request.get("command")
         if command in {"patch_init", "patch_candidate", "patch_finalize", "patch_restore", "patch_export"}:
             return self.patch(request)
-        methods = {"init": self.initialise, "inspect": self.inspect, "evaluate": self.evaluate, "health": self.health, "edit": self.edit, "accept": self.accept, "rollback": self.rollback, "save": self.save}
+        methods = {"init": self.initialise, "inspect": self.inspect, "probe_activations": self.probe_activations, "evaluate": self.evaluate, "health": self.health, "edit": self.edit, "accept": self.accept, "rollback": self.rollback, "save": self.save}
         if command == "shutdown":
             return {"stopped": True}
         if command not in methods:

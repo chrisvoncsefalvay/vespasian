@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "usage": "offline_diagnostic_tests_only",
+  "source": {
+    "attribution": "RikiyaT, lm_understand-logs, exp8_math/p50c original-model practice run",
+    "license": "CC-BY-4.0",
+    "url": "https://github.com/RikiyaT/lm_understand-logs/blob/main/exp8_math/runs/p50c/tool_calls.jsonl#L4",
+    "record_number": 4,
+    "field": "out",
+    "generation_request": "https://github.com/RikiyaT/lm_understand-logs/blob/main/exp8_math/runs/p50c/requests/fwd_1.json.claimed",
+    "generation_result": "https://github.com/RikiyaT/lm_understand-logs/blob/main/exp8_math/runs/p50c/requests/fwd_1.done.json",
+    "license_source": "https://github.com/RikiyaT/lm_understand-logs/blob/main/README.md",
+    "verified_date": "2026-11-12",
+    "original_model": true,
+    "held_out": false,
+    "dataset_role": "GSM8K training-set practice episodes used in upstream diagnosis",
+    "excerpt_representation": "Exact published 250-character START/MID/END slices; the source logger had already replaced newlines with spaces. Trailing spaces preserved.",
+    "completeness": "Excerpts only, not complete generated traces. Do not concatenate disjoint slices or invent omitted text.",
+    "metadata_scope": "tokens, cut, correct and pred describe the complete upstream generation, not the 250-character excerpts. cut=false does not publish an EOS or thinking-closure marker.",
+    "isolation": "Not starter, optimization, validation, test-split or preservation data. Imported only by offline diagnostic fixture tests."
+  },
+  "episodes": [
+    {
+      "problem_id": "gsm8k_train_5410",
+      "metadata": {
+        "sample_index": 0,
+        "tokens": 32768,
+        "cut": true,
+        "correct": false,
+        "pred": null
+      },
+      "excerpts": {
+        "start": "Here's a thinking process that leads to the solution:  1.  **Analyze the Request:**     *   **Goal:** Determine how many hours faster James can hike.     *   **Scenario:** Two trails, one downhill and one uphill.     *   **Trail 1 (Downhill):** Dista",
+        "mid": "the end.                 *   Wait, if he spends 1 hour walking, he cannot reach the end.                 *   Wait, if he spends 1 hour walking, he cannot reach the end.                 *   Wait, if he spends 1 hour walking, he cannot reach the end.  ",
+        "end": "nds 1 hour walking, he cannot reach the end.                 *   Wait, if he spends 1 hour walking, he cannot reach the end.                 *   Wait, if he spends 1 hour walking, he cannot reach the end.                 *   Wait, if he spends 1 hour"
+      }
+    },
+    {
+      "problem_id": "gsm8k_train_2805",
+      "metadata": {
+        "sample_index": 0,
+        "tokens": 1336,
+        "cut": false,
+        "correct": true,
+        "pred": "23"
+      },
+      "excerpts": {
+        "start": "Here's a thinking process that leads to the solution:  1.  **Analyze the Request:**     *   **Subject:** Brittany and her gerbils (Puffy, Muffy, Scruffy).     *   **Given Data:**         *   Puffy weighs $X$ more than Muffy. Let $M = \\text{weight of ",
+        "mid": "ces\" is given.     \"Muffy weighs 3 ounces less than Scruffy\" -> Muffy = Scruffy - 3.     \"Puffy weighs 5 ounces more than Muffy\" -> Puffy = Muffy + 5.     \"Brittany put Puffy and Muffy on the scale\" -> Sum of their weights.      Wait, did I miss anyt",
+        "end": "lculate the total weight on the scale.** The question asks for the sum of Puffy and Muffy's weights when they are placed on the scale. *   Puffy weighs 14 ounces. *   Muffy weighs 9 ounces. *   Total weight = $14 + 9 = 23 \\text{ ounces}$.  \\boxed{23}"
+      }
+    }
+  ]
+}

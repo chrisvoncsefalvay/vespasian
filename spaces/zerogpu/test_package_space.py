@@ -91,6 +91,14 @@ class BundleTests(BundleFixture, unittest.TestCase):
         self.assertTrue((self.output / "python_bridge.py").stat().st_mode & stat.S_IXUSR)
         self.assertTrue((self.output / "bin/vespasian").stat().st_mode & stat.S_IXUSR)
 
+    def test_probe_behavior_and_shared_limits_are_required_runtime_files(self):
+        self.assertTrue({"probes.py", "behavior.py"}.issubset(package.CORE_FILES))
+        self.assertIn("limits.py", package.SPACE_FILES)
+        manifest = self.build()
+        for name in ("core/probes.py", "core/behavior.py", "limits.py"):
+            self.assertIn(name, manifest["files"])
+            self.assertTrue((self.output / name).is_file())
+
     def test_bundle_contains_complete_starter_data_and_provenance(self):
         source = Path(__file__).resolve().parents[2] / "examples"
         manifest = json.loads((source / "starter-manifest.json").read_text(encoding="utf-8"))

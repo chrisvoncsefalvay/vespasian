@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
+
+- General non-test behavior diagnostics with full rollout paging, concise observed evidence and unchanged correctness/preservation acceptance rules.
+- On-demand forward activation probes and state-bound, selected-column direction projection edits, with dtype-aware norm checks, rollback and replay.
+- Target thinking off/on/model-default controls, explicit longer core generation/context bounds and shared Space deployment limits.
+- OpenAI Standard-tier/cache-aware budget reservations and settlement, with unresolved-usage stops and honest conservative-estimate receipts.
+- Real paid starter routing regression tests; selecting a card is free, starting invokes the normal paid editor loop.
 
 - Four-section Space onboarding with optional Hugging Face login, an explanation of weight-space editing, usage guidance and quick starters.
 - Four reproducible, original synthetic starter datasets with independent edit, validation, test and preservation splits, shared terminal/Space settings, provenance and offline checks.
