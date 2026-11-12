@@ -69,7 +69,7 @@ class Provider:
             "scope": "openid profile",
             "expires_at": int(time.time()) + 3600,
             "userinfo": {
-                "name": "Fixture User", "preferred_username": "fixture-user",
+                "name": "Fixture User", "preferred_username": "fixture-user" + ("-long" * 10 if request.cookies.get("fixture_long_username") == "1" else ""),
                 "profile": "https://huggingface.co/fixture-user", "picture": "",
             },
         }
@@ -132,6 +132,50 @@ def blocked_functions(config):
     }
 
 
+def check_header(page, engine, signed_in, username):
+    """Check the real Gradio controls, without contacting the OAuth provider."""
+    page.locator(".vs-guide-top [data-guide-close]").click()
+    login = page.locator("#vs-login")
+    expect(login).to_have_attribute("aria-label", f"Sign out of Hugging Face ({username})" if signed_in else "Sign in with Hugging Face")
+    for width in (320, 390, 1280):
+        page.set_viewport_size({"width": width, "height": 900})
+        theme = page.locator(".vs-header-links [data-vs-theme-toggle]")
+        help_control = page.locator(".vs-header-links [data-vs-help]")
+        expect(help_control).to_have_attribute("aria-label", "Quick guide")
+        for control in (theme, help_control, login):
+            box = control.bounding_box()
+            assert box and box["width"] >= 44 and 44 <= box["height"] <= 48, box
+            assert box["x"] >= 0 and box["x"] + box["width"] <= width, box
+            control.focus()
+            expect(control).to_be_focused()
+        assert theme.inner_text() == ""
+        assert help_control.inner_text() == ""
+        original = page.locator("html").get_attribute("data-vs-theme")
+        theme.press("Enter")
+        expect(page.locator("html")).to_have_attribute("data-vs-theme", "light" if original == "dark" else "dark")
+        assert page.evaluate("localStorage.getItem('vespasian.theme')") != original
+        page.screenshot(animations="disabled", path=f"/tmp/vespasian-header-{engine}-{'signed-in' if signed_in else 'anonymous'}-{width}-alternate.png")
+        theme.press("Enter")
+        help_control.press("Enter")
+        expect(page.locator("#vs-guide[open]")).to_be_visible()
+        page.keyboard.press("Escape")
+        expect(help_control).to_be_focused()
+        expect(page.locator("#vs-guide")).not_to_be_visible()
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+        page.screenshot(animations="disabled", path=f"/tmp/vespasian-header-{engine}-{'signed-in' if signed_in else 'anonymous'}-{width}.png")
+    if not signed_in:
+        page.locator('#vs-setup-tabs button[data-tab-id="editor"]').click()
+        effort = page.locator("#vs-reasoning-effort")
+        expect(effort).to_be_visible()
+        expect(effort.locator("input")).to_have_value("low")
+        effort.locator("input").click()
+        effort.get_by_role("option", name="high", exact=True).click()
+        expect(effort.locator("input")).to_have_value("high")
+        page.locator('#vs-setup-tabs button[data-tab-id="target"]').click()
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.locator(".vs-header-links [data-vs-help]").click()
+
+
 def exercise_browsers(origin, wrapper, config):
     receipts, forbidden = [], []
     forbidden_functions = blocked_functions(config)
@@ -152,6 +196,10 @@ def exercise_browsers(origin, wrapper, config):
                     context = browser.new_context(
                         viewport={"width": 390, "height": 844}, ignore_https_errors=True,
                     )
+                    username = "fixture-user"
+                    if not embedded and not guide:
+                        username += "-long" * 10
+                        context.add_cookies([{"name": "fixture_long_username", "value": "1", "url": origin}])
                     errors = []
 
                     def guard(route):
@@ -183,6 +231,8 @@ def exercise_browsers(origin, wrapper, config):
                         page.goto(wrapper if embedded else origin, wait_until="domcontentloaded")
                         frame = page.frame_locator("iframe") if embedded else page
                         expect(frame.locator("#vs-guide[open]")).to_be_visible(timeout=30000)
+                        if not embedded and not guide:
+                            check_header(page, engine, False, username)
                         def start_login():
                             if guide:
                                 frame.locator("[data-guide-login]").click()
@@ -221,7 +271,7 @@ def exercise_browsers(origin, wrapper, config):
                             if interrupted:
                                 expect(popup.value.locator("h1")).to_have_text("Sign-in paused")
                                 popup.value.close()
-                                expect(frame.locator("#vs-login")).to_have_text("Sign in with Hugging Face")
+                                expect(frame.locator("#vs-login")).to_have_text("Not logged in")
                                 # The deliberate retry follows the double-tap pause.
                                 page.wait_for_timeout(1500)
                                 with context.expect_page() as popup:
@@ -231,9 +281,9 @@ def exercise_browsers(origin, wrapper, config):
                         else:
                             start_login()
                         expect(page.locator("#vs-login")).to_contain_text(
-                            "Logout (fixture-user)", timeout=30000,
+                            username, timeout=30000,
                         )
-                        expect(page.locator("#vs-profile")).to_contain_text("Connected")
+                        expect(page.locator("#vs-profile .vs-profile")).to_have_text("")
                         assert page.url.startswith(origin), page.url
                         if guide and not interrupted and not blocked_popup:
                             expect(page.locator('[data-guide-tab="1"]')).to_have_attribute(
@@ -245,13 +295,15 @@ def exercise_browsers(origin, wrapper, config):
                         page.evaluate("localStorage.removeItem('vespasian.guide.v2')")
                         page.reload(wait_until="domcontentloaded")
                         expect(page.locator("#vs-guide[open]")).to_be_visible()
-                        expect(page.locator("#vs-login")).to_contain_text("Logout (fixture-user)")
+                        expect(page.locator("#vs-login")).to_have_text(username)
                         expect(page.locator("[data-guide-login]")).to_have_text("Continue signed in")
+                        if not embedded and not guide:
+                            check_header(page, engine, True, username)
                         page.locator("[data-guide-login]").click()
                         expect(page.locator('[data-guide-tab="1"]')).to_have_attribute(
                             "aria-selected", "true",
                         )
-                        expect(page.locator("#vs-login")).to_contain_text("Logout (fixture-user)")
+                        expect(page.locator("#vs-login")).to_have_text(username)
                         page.locator(".vs-guide-top [data-guide-close]").click()
                         if not embedded and not guide:
                             # Same-origin fixture ensures a signed-in iframe in both
@@ -259,21 +311,21 @@ def exercise_browsers(origin, wrapper, config):
                             page.goto(origin + "/test-oauth-iframe")
                             signed_frame = page.frame_locator("iframe")
                             expect(signed_frame.locator("#vs-login")).to_contain_text(
-                                "Logout (fixture-user)", timeout=30000,
+                                username, timeout=30000,
                             )
                             if signed_frame.locator("#vs-guide[open]").count():
                                 signed_frame.locator(".vs-guide-top [data-guide-close]").click()
                             pages_before = len(context.pages)
                             signed_frame.locator("#vs-login").click()
                             expect(signed_frame.locator("#vs-login")).to_have_text(
-                                "Sign in with Hugging Face", timeout=30000,
+                                "Not logged in", timeout=30000,
                             )
                             assert len(context.pages) == pages_before
                             page.goto(origin)
                         else:
                             page.locator("#vs-login").click()
                         expect(page.locator("#vs-login")).to_have_text(
-                            "Sign in with Hugging Face", timeout=30000,
+                            "Not logged in", timeout=30000,
                         )
                         if not embedded and not guide:
                             await_starts = []
@@ -293,7 +345,7 @@ def exercise_browsers(origin, wrapper, config):
                             with context.expect_page() as recovered:
                                 page.get_by_role("link", name="Open standalone workbench").click()
                             recovery = recovered.value
-                            expect(recovery.locator("#vs-login")).to_have_text("Sign in with Hugging Face")
+                            expect(recovery.locator("#vs-login")).to_have_text("Not logged in")
                             assert len(await_starts) == 4
                             page.go_back(wait_until="domcontentloaded")
                             assert len(await_starts) == 4
@@ -301,7 +353,7 @@ def exercise_browsers(origin, wrapper, config):
                             if recovery.locator("#vs-guide[open]").count():
                                 recovery.locator(".vs-guide-top [data-guide-close]").click()
                             recovery.locator("#vs-login").click()
-                            expect(recovery.locator("#vs-login")).to_contain_text("Logout (fixture-user)")
+                            expect(recovery.locator("#vs-login")).to_have_text(username)
                             recovery.close()
                         assert not errors, errors
                         assert not forbidden, forbidden

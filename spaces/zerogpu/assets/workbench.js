@@ -13,7 +13,12 @@
     document.querySelectorAll('.gradio-container').forEach(el => { el.dataset.vsTheme = theme })
     document.querySelectorAll('[data-vs-theme-toggle]').forEach(button => {
       const label = theme === 'dark' ? 'Light mode' : 'Dark mode'
-      button.textContent = label
+      const paths = theme === 'dark'
+        ? '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/>'
+        : '<path d="M20 15.5A9 9 0 0 1 8.5 4 9 9 0 1 0 20 15.5Z"/>'
+      button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${paths}</svg>`
+      button.classList.add('vs-icon-control')
+      button.title = `Switch to ${label.toLowerCase()}`
       button.setAttribute('aria-label', `Switch to ${label.toLowerCase()}`)
     })
   }
@@ -147,7 +152,16 @@
     const root = document.querySelector('#vs-login')
     return root?.matches('button,a') ? root : root?.querySelector('button,a')
   }
-  const isSignedIn = login => Boolean(login && /sign\s*out|log\s*out/i.test(login.textContent))
+  // Native LoginButton renders its label from the validated OAuth session.
+  // A pasted API token never changes this component.
+  const isSignedIn = login => Boolean(login && login.textContent.trim() && login.textContent.trim() !== 'Not logged in')
+  function syncLoginLabel() {
+    const login = nativeLogin()
+    if (!login) return
+    const label = isSignedIn(login) ? `Sign out of Hugging Face (${login.textContent.trim()})` : 'Sign in with Hugging Face'
+    login.setAttribute('aria-label', label)
+    login.title = label
+  }
   function syncGuideLogin() {
     const button = dialog.querySelector('[data-guide-login]')
     if (!button) return
@@ -375,7 +389,7 @@
         }
       }
       const sections = {
-        '#vs-max-turns': '#vs-advanced-runtime', '#vs-reasoning-effort': '#vs-advanced-runtime',
+        '#vs-max-turns': '#vs-advanced-runtime',
         '#vs-input-price': '#vs-advanced-runtime', '#vs-output-price': '#vs-advanced-runtime',
         '#vs-metric': '#vs-advanced-evaluation', '#vs-target-type': '#vs-advanced-evaluation',
         '#vs-health-checks': '#vs-advanced-evaluation', '#vs-health-count': '#vs-advanced-evaluation',
@@ -507,6 +521,7 @@
     scheduled = true
     requestAnimationFrame(() => {
       scheduled = false
+      syncLoginLabel()
       syncGuideLogin()
       syncTabs()
       restoreDashboard()
@@ -527,6 +542,7 @@
     syncPlatformHeader()
     platformObserver.observe(document.body, {childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'style', 'class']})
     window.addEventListener('resize', syncPlatformHeader)
+    syncLoginLabel()
     syncTabs()
     restoreDashboard()
     syncViewMotion()

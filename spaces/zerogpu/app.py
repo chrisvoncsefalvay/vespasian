@@ -115,9 +115,9 @@ def create_app():
         except Exception as error:
             return (f'<div class="vs-profile"><p>{html.escape(safe_error(error, token))}</p></div>', [], gr.skip(), gr.skip(), gr.skip())
         if name:
-            display = f'<div class="vs-profile"><span class="vs-connected">Connected</span><strong>{html.escape(name)}</strong><p>Your datasets and Hub exports are available.</p></div>'
+            display = f'<div class="vs-profile"><p>Token: {html.escape(name)}</p></div>' if (override or '').strip() else '<div class="vs-profile"></div>'
             return display, datasets, gr.update(choices=datasets), gr.update(placeholder=f"{name}/vespasian-model"), gr.update(placeholder=f"{name}/vespasian-trajectories")
-        return ('<div class="vs-profile"><p>Use public datasets now, or connect your account for private data and Hub exports.</p></div>', [], gr.update(choices=["openai/gsm8k"]), gr.skip(), gr.skip())
+        return ('<div class="vs-profile"></div>', [], gr.update(choices=["openai/gsm8k"]), gr.skip(), gr.skip())
 
     def catalog(kind, owned, recent):
         entries = owned if kind == "account" else recent if kind == "recent" else ["openai/gsm8k"]

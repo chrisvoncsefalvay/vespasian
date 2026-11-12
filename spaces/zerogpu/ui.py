@@ -117,8 +117,8 @@ from limits import DEFAULT_MAX_NEW_TOKENS, DEFAULT_MAX_SEQ_LENGTH, DEFAULT_MAX_R
 _MARK = '<svg viewBox="0 0 30 30" aria-hidden="true"><path d="M3 7 15 24 27 7M9 7l6 8 6-8" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>'
 HEADER = f"""<header class="vs-masthead">
 <a class="vs-wordmark" href="https://github.com/chrisvoncsefalvay/vespasian" target="_blank" rel="noopener noreferrer">{_MARK}<h1>Vespasian</h1></a>
-<span class="vs-masthead-meta">The Weight Space Editing Assistant/{RELEASE_LABEL}</span>
-<nav class="vs-header-links" aria-label="Appearance and help"><button type="button" data-vs-theme-toggle aria-label="Switch to light mode">Light mode</button><button type="button" data-vs-help>Quick guide</button><a href="https://github.com/chrisvoncsefalvay/vespasian#readme" target="_blank" rel="noopener noreferrer">Documentation ↗</a></nav>
+<span class="vs-masthead-meta">Weight editing · {RELEASE_LABEL}</span>
+<nav class="vs-header-links" aria-label="Appearance and help"><button type="button" class="vs-icon-control" data-vs-theme-toggle aria-label="Switch to light mode" title="Switch to light mode"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></svg></button><button type="button" class="vs-icon-control" data-vs-help aria-label="Quick guide" title="Quick guide"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 0 1 6 0c0 2-3 2-3 4m0 3h.01"/></svg></button><a href="https://github.com/chrisvoncsefalvay/vespasian#readme" target="_blank" rel="noopener noreferrer">Docs ↗</a></nav>
 </header>"""
 PREVIEW_EMPTY = '<div class="vs-preview-empty"><h3>Preview your examples</h3><p>Choose a dataset and inspect it to select fields and check the examples the model will use.</p></div>'
 
@@ -133,8 +133,8 @@ def build_ui() -> tuple[gr.Blocks, dict[str, Any]]:
     with gr.Blocks(title="Vespasian · Weight Space Editing Assistant", fill_width=True, delete_cache=(600, 7200)) as demo:
         gr.HTML(HEADER, elem_id="vs-header")
         with gr.Row(elem_id="vs-account", equal_height=False):
-            controls["profile_html"] = gr.HTML('<div class="vs-profile"><p>Public datasets are ready to use. Connect your account for private data and Hub exports.</p></div>', scale=3, elem_id="vs-profile")
-            controls["login_button"] = gr.LoginButton("Sign in with Hugging Face", scale=1, min_width=230, elem_id="vs-login")
+            controls["profile_html"] = gr.HTML('<div class="vs-profile"></div>', scale=3, elem_id="vs-profile")
+            controls["login_button"] = gr.LoginButton("Not logged in", logout_value="{}", scale=0, min_width=44, elem_id="vs-login")
             with gr.Accordion("Access token", open=False, elem_id="vs-token-access"):
                 controls["hf_token"] = gr.Textbox(type="password", label="Hugging Face token override", placeholder="Optional", info="Use this to connect a different account or access token.")
         with gr.Column(elem_id="vs-workbench"):
@@ -225,15 +225,15 @@ def build_ui() -> tuple[gr.Blocks, dict[str, Any]]:
                             with gr.Column(min_width=280):
                                 controls["editor"] = gr.Radio(choices=[("OpenAI", "openai"), ("Anthropic", "anthropic")], value="openai", label="Editor provider", elem_id="vs-editor")
                                 controls["editor_model"] = gr.Dropdown(choices=setup.editor_choices("openai"), value="gpt-6.1-sol", allow_custom_value=True, label="Editor model", info="Use a listed model with supported strict-budget pricing. Custom-price estimates require the terminal with --budget-policy auto.", elem_id="vs-editor-model")
+                                controls["reasoning_effort"] = gr.Dropdown(choices=["low", "medium", "high"], value="low", label="Editor reasoning effort", info="Sent to the selected provider; unsupported requests stop without substitution.", elem_id="vs-reasoning-effort")
                                 controls["api_key"] = gr.Textbox(type="password", label="Editor API key", placeholder="Your provider’s API key", elem_id="vs-api-key")
                             with gr.Column(min_width=280):
                                 controls["budget"] = gr.Number(value=10.0, minimum=0.01, maximum=100, step=0.25, label="Editor budget · USD", elem_id="vs-budget")
-                                gr.HTML('<p class="vs-inline-note">Default: low editor reasoning, target thinking off, no turn cap. Generation limits are reviewed below. The spending limit includes every editor decision and tool request.</p>')
+                                gr.HTML('<p class="vs-inline-note">Defaults: target thinking off, no turn cap. Generation limits are reviewed below. The spending limit includes every editor decision and tool request.</p>')
                                 controls["pricing_html"] = gr.HTML("", elem_id="vs-pricing")
                         with gr.Accordion("Advanced runtime settings", open=False, elem_id="vs-advanced-runtime"):
                             with gr.Row():
                                 controls["max_turns"] = gr.Textbox(value="", placeholder="No turn cap", label="Maximum edit turns · optional", info="Leave blank to use only the spending limit. There is no default turn cap.", elem_id="vs-max-turns")
-                                controls["reasoning_effort"] = gr.Dropdown(choices=["low", "medium", "high"], value="low", label="Editor reasoning effort", info="Sent to the selected provider; unsupported requests stop without substitution.", elem_id="vs-reasoning-effort")
                                 controls["max_new_tokens"] = gr.Number(value=min(DEFAULT_MAX_NEW_TOKENS, limits["max_new_tokens"]), minimum=1, maximum=limits["max_new_tokens"], step=1, precision=0, label="Maximum generated tokens per answer", info="Includes any target thinking tokens. Reaching the cap truncates output.", elem_id="vs-max-new-tokens")
                             with gr.Row():
                                 controls["thinking_mode"] = gr.Dropdown(choices=[("Off · preserve starter baseline", "off"), ("On · compatible chat models", "on"), ("Auto · model template default", "auto")], value="off", label="Target model thinking", info="Separate from editor reasoning. On requires a compatible chat template; auto may enable thinking and use more tokens.", elem_id="vs-thinking-mode")
@@ -292,7 +292,7 @@ def build_ui() -> tuple[gr.Blocks, dict[str, Any]]:
                         controls["patch_save_create"] = gr.Checkbox(value=False, label="Create this private repository if needed")
                         controls["publish_patches_button"] = gr.Button("Save latest/best patches privately", interactive=False)
                     controls["publish_status"] = gr.Markdown("", elem_id="vs-publish-status")
-        gr.HTML('<footer class="vs-page-footer"><span>Vespasian/The Weight Space Editing Assistant</span><button type="button" data-vs-help>Quick guide</button><a href="https://github.com/chrisvoncsefalvay/vespasian" target="_blank" rel="noopener noreferrer">Source code ↗</a></footer>')
+        gr.HTML('<footer class="vs-page-footer"><span>Vespasian/The Weight Space Editing Assistant</span><button type="button" class="vs-icon-control" data-vs-help aria-label="Quick guide" title="Quick guide"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 0 1 6 0c0 2-3 2-3 4m0 3h.01"/></svg></button><a href="https://github.com/chrisvoncsefalvay/vespasian" target="_blank" rel="noopener noreferrer">Source code ↗</a></footer>')
         controls["state"] = gr.State({"events": [], "status": "idle", "config": {}})
         controls["selection"] = gr.State({"turn": None, "split": "all", "outcome": "all", "page": 0, "follow": True})
         controls["preview_state"] = gr.State({})

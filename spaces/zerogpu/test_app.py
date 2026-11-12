@@ -33,6 +33,21 @@ class AppRequestTests(unittest.IsolatedAsyncioTestCase):
         cls.controls = cls.demo.vespasian_controls
         cls.callbacks = {function.api_name: function for function in cls.demo.fns.values()}
 
+    def test_compact_login_label_comes_only_from_valid_session(self):
+        from types import SimpleNamespace
+        login = self.controls["login_button"]
+        self.assertEqual(login.value, "Not logged in")
+        self.assertEqual(login.logout_value, "{}")
+        for session, expected in (
+            ({}, "Not logged in"),
+            ({"hf_token": "pasted-token"}, "Not logged in"),
+            ({"oauth_info": {"expires_at": 1, "userinfo": {"preferred_username": "expired-user"}}}, "Not logged in"),
+            ({"oauth_info": {"userinfo": {"preferred_username": "session-user"}}}, "session-user"),
+            ({"oauth_info": {"userinfo": {"preferred_username": "long-" + "username" * 8}}}, "long-" + "username" * 8),
+        ):
+            request = SimpleNamespace(session=session, request=SimpleNamespace(session=session))
+            self.assertEqual(login._check_login_status(request).value, expected)
+
     def test_setup_order_and_runtime_defaults(self):
         tabs = [component for component in self.demo.blocks.values() if isinstance(component, self.gr.Tab)]
         setup_tabs = [component.id for component in tabs if component.id in {"target", "behaviour", "data", "editor", "review"}]
@@ -54,11 +69,21 @@ class AppRequestTests(unittest.IsolatedAsyncioTestCase):
         by_id = {getattr(block, "elem_id", None): block for block in self.demo.blocks.values()}
         for key in ("vs-advanced-runtime", "vs-advanced-evaluation", "vs-deployment-limits", "vs-patch-backup"):
             self.assertFalse(by_id[key].open)
-        for field in ("model", "hf_task", "goal", "editor", "editor_model", "api_key", "budget"):
+        for field in ("model", "hf_task", "goal", "editor", "editor_model", "reasoning_effort", "api_key", "budget"):
             self.assertTrue(self.controls[field].visible)
         self.assertFalse(self.controls["patch_backup"].value)
         self.assertFalse(self.controls["patch_create"].value)
         self.assertEqual(self.controls["save_format"].value, "model")
+
+    def test_editor_effort_is_visible_beside_model_not_in_advanced(self):
+        effort = self.controls["reasoning_effort"]
+        self.assertIs(effort.parent, self.controls["editor_model"].parent)
+        self.assertEqual(effort.value, "low")
+        self.assertEqual([choice[1] for choice in effort.choices], ["low", "medium", "high"])
+        ancestor = effort.parent
+        while ancestor is not None:
+            self.assertNotIsInstance(ancestor, self.gr.Accordion)
+            ancestor = getattr(ancestor, "parent", None)
 
     def test_inspection_controls_use_operator_limits_and_live_in_advanced(self):
         for field in ("thinking_mode", "max_new_tokens", "max_seq_length", "max_relative_norm"):
@@ -619,6 +644,13 @@ class AppRequestTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.session[self.controls[name]._id], {})
         for name in ("preview_html", "test_preview_html"):
             self.assertIn("Refresh", self.returned(invalidate, result, name))
+
+    async def test_account_strip_distinguishes_token_override_from_session(self):
+        function = self.callback("hf_token", "submit", "account")
+        for override, expected in (("  ", '<div class="vs-profile"></div>'), ("override-token", '<div class="vs-profile"><p>Token: visitor</p></div>')):
+            with patch.object(self.app.hub, "account_datasets", return_value=("visitor", [])):
+                result = (await self.call(function, self.request(), self.inputs(function, {"hf_token": override})))[0]
+            self.assertEqual(self.returned(function, result, "profile_html"), expected)
 
     async def test_token_submit_refreshes_account_with_selected_token(self):
         function = self.callback("hf_token", "submit", "account")

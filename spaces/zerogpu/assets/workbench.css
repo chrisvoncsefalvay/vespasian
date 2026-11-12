@@ -512,3 +512,31 @@ body{margin:0;-webkit-font-smoothing:antialiased}
 .vs-patch-status p { margin: 6px 0 0; color: #aeb8b3; font-size: 13px; }
 
 #vs-starter-input,#vs-starter-submit{display:none!important}
+
+/* Compact utilities retain full keyboard focus and 44px touch targets. */
+.gradio-container .vs-icon-control,#vs-guide .vs-icon-control{display:inline-flex;align-items:center;justify-content:center;flex:0 0 44px;width:44px;height:44px;min-height:44px;padding:10px!important;border:0!important;background:transparent;color:var(--vs-muted);cursor:pointer}
+.vs-icon-control svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.gradio-container .vs-icon-control:hover,#vs-guide .vs-icon-control:hover{color:var(--vs-copper);background:var(--vs-hover)}
+.vs-header-links{gap:4px}
+.vs-header-links a{margin-left:8px}
+#vs-account{gap:8px!important;padding:4px 0!important}
+#vs-login{order:-1;flex:0 1 auto!important;min-width:44px!important;max-width:min(280px,100%)!important;width:auto!important;min-height:44px!important;padding:8px!important;border:0!important;background:transparent!important;color:var(--vs-muted)!important;box-shadow:none!important;font:13px/1.5 var(--vs-sans)!important;overflow:hidden}
+#vs-login:hover{color:var(--vs-copper)!important;background:var(--vs-hover)!important}
+#vs-login img{width:22px;height:22px;flex-shrink:0}
+#vs-login span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+#vs-profile{flex:1 1 0!important;min-width:0!important}
+#vs-profile:has(.vs-profile:empty){display:none}
+#vs-token-access{margin-left:auto}
+@media(max-width:640px){#vs-account{flex-wrap:wrap!important}#vs-profile{flex-basis:100%!important;order:2}.vs-header-links{width:auto;margin-left:auto}.vs-masthead{gap:8px}.vs-masthead-meta{display:none}}
+
+#vs-account>.form:has(#vs-token-access){flex:0 1 150px!important;min-width:120px!important;margin-left:auto!important}
+#vs-account>.form:has(#vs-token-access .label-wrap.open){flex-basis:340px!important}
+#vs-token-access{border:0!important;background:transparent!important}
+#vs-token-access>.label-wrap{min-height:44px;padding:10px 8px!important;white-space:nowrap}
+#vs-token-access>.label-wrap>span{font-size:12px!important}
+@media(max-width:480px){.vs-masthead{padding-bottom:0}#vs-account>.form:has(#vs-token-access .label-wrap.open){flex-basis:100%!important}}
+
+#vs-login{display:block!important;text-align:left!important;white-space:nowrap!important;text-overflow:ellipsis}
+#vs-login img{display:inline-block;vertical-align:middle;margin-right:6px}
+.gradio-container .vs-icon-control,#vs-guide .vs-icon-control{background:transparent!important;color:var(--vs-muted)!important}
+.gradio-container .vs-icon-control:hover,#vs-guide .vs-icon-control:hover{background:var(--vs-hover)!important;color:var(--vs-copper)!important}
