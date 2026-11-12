@@ -109,6 +109,8 @@ vespasian examples/concise.jsonl --task text-generation \
 
 Goals are free-form. The frontier editor first checks whether the examples support a useful experiment and selects an evaluation measure. Set `--metric exact_match`, `--metric token_f1`, `--metric numeric_match` or `--metric semantic` to choose the measure yourself. `--max-turns` optionally limits proposed changes independently of the dollar budget. It has no default cap.
 
+The editor retains bounded recent evidence and tool receipts so it can compare behaviour diagnostics with rollout examples without loading the full manifest. Repeating an identical request for evidence still visible in the current state produces a warning and reuses the result. If the next request also repeats already-visible evidence, inspection stops before another editor call, without forcing a candidate or changing weights. New queries and pages remain available; previously evicted or truncated evidence can be retrieved again. This no-progress check is separate from the optional turn cap and does not catch every repetitive workflow.
+
 | Example | Behaviour | Mode |
 | --- | --- | --- |
 | [greetings.jsonl](examples/greetings.jsonl) | Reply to greetings with a chosen phrase | `paired` |

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Retain bounded recent editor evidence and request receipts. Reuse identical same-state reads and stop inspection after a repeat warning followed by another request for already-visible evidence. New queries, pages and recovery of evicted or truncated evidence remain available; no candidate is forced.
+
 ## 0.3.0
 
 - General non-test behavior diagnostics with full rollout paging, concise observed evidence and unchanged correctness/preservation acceptance rules.
