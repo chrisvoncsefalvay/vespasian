@@ -147,6 +147,56 @@
     const root = document.querySelector('#vs-login')
     return root?.matches('button,a') ? root : root?.querySelector('button,a')
   }
+  const isSignedIn = login => Boolean(login && /sign\s*out|log\s*out/i.test(login.textContent))
+  function syncGuideLogin() {
+    const button = dialog.querySelector('[data-guide-login]')
+    if (!button) return
+    const login = nativeLogin(), signedIn = isSignedIn(login)
+    const label = signedIn ? 'Continue signed in' : 'Sign in with Hugging Face'
+    if (button.textContent !== label) button.textContent = label
+    const disabled = !login || login.disabled
+    if (button.disabled !== Boolean(disabled)) button.disabled = Boolean(disabled)
+    const next = dialog.querySelector('.vs-guide-welcome-actions [data-guide-next]')
+    const nextLabel = signedIn ? 'Continue to the guide' : 'Proceed without login'
+    if (next && next.textContent !== nextLabel) next.textContent = nextLabel
+  }
+  // Safari blocks the Space's session cookie inside the Hub's cross-site iframe.
+  // Open a standalone tab so the callback and app share first-party cookies.
+  // The Hub sandbox permits popups but forbids top navigation. Keep Gradio's
+  // own OAuth routes and state
+  // validation; neither credentials nor session cookies are handled here.
+  document.addEventListener('click', event => {
+    if (window.self === window.top || !event.target.closest('#vs-login')) return
+    const login = nativeLogin()
+    // Logout must clear the iframe's own session, including partitioned cookies.
+    if (!login || login.disabled || isSignedIn(login)) return
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    const target = new URL('login/huggingface', window.location.origin + '/')
+    const returnTo = new URL(window.location.href)
+    try {
+      if (sessionStorage.getItem(`${guideKey}.resume`) === '1') {
+        returnTo.searchParams.set('__vs_guide_resume', '1')
+        sessionStorage.removeItem(`${guideKey}.resume`)
+      }
+    } catch {}
+    target.searchParams.set('_target_url', returnTo.pathname + returnTo.search)
+    window.open(target.href, '_blank', 'noopener,noreferrer')
+    let note = document.querySelector('#vs-login-help')
+    if (!note) {
+      note = document.createElement('p')
+      note.id = 'vs-login-help'
+      note.className = 'vs-inline-note'
+      note.setAttribute('role', 'status')
+      document.querySelector('#vs-account')?.insertAdjacentElement('afterend', note)
+    }
+    const link = document.createElement('a')
+    link.href = window.location.href
+    link.target = '_blank'
+    link.rel = 'noopener noreferrer'
+    link.textContent = 'Open standalone workbench'
+    note.replaceChildren('Continue in the standalone tab to use your account. ', link)
+  }, true)
   function renderGuide(focus = false) {
     dialog.querySelector('.vs-guide-body').scrollTop = 0
     const [title, text, detail] = sections[guideStep]
@@ -164,9 +214,9 @@
     content.replaceChildren()
     if (guideStep === 0) {
       const login = nativeLogin()
-      const signedIn = login && /sign\s*out|log\s*out/i.test(login.textContent)
+      const signedIn = isSignedIn(login)
       content.innerHTML = `<div class="vs-guide-welcome-actions"><button type="button" class="vs-guide-next" data-guide-login>${signedIn ? 'Continue signed in' : 'Sign in with Hugging Face'}</button><button type="button" data-guide-next>${signedIn ? 'Continue to the guide' : 'Proceed without login'}</button></div>`
-      if (!login) content.querySelector('[data-guide-login]').disabled = true
+      syncGuideLogin()
     } else if (guideStep === 1) {
       content.innerHTML = '<ol class="vs-guide-diagram" aria-label="Editing cycle"><li><span>01</span><strong>Assess the baseline</strong></li><li><span>02</span><strong>Inspect the model</strong></li><li><span>03</span><strong>Plan a focused edit</strong></li><li><span>04</span><strong>Patch the weights</strong></li><li><span>05</span><strong>Test the candidate</strong></li><li><span>06</span><strong>Keep or revert</strong></li></ol>'
     } else if (guideStep === 2) {
@@ -243,7 +293,7 @@
     } else if (event.target.closest('[data-guide-login]')) {
       const login = nativeLogin()
       if (!login || login.disabled) return
-      if (/sign\s*out|log\s*out/i.test(login.textContent)) { guideStep = 1; renderGuide(true); return }
+      if (isSignedIn(login)) { guideStep = 1; renderGuide(true); return }
       // Delegate to Gradio's OAuth component; never read or persist credentials.
       try { sessionStorage.setItem(`${guideKey}.resume`, '1') } catch {}
       dialog.close()
@@ -279,6 +329,12 @@
   function resumeGuide() {
     let resume = false
     try { resume = sessionStorage.getItem(`${guideKey}.resume`) === '1'; sessionStorage.removeItem(`${guideKey}.resume`) } catch {}
+    const url = new URL(window.location.href)
+    if (url.searchParams.get('__vs_guide_resume') === '1') {
+      resume = true
+      url.searchParams.delete('__vs_guide_resume')
+      history.replaceState(history.state, '', url.pathname + url.search + url.hash)
+    }
     if (resume) showGuide(1)
     return resume
   }
@@ -446,6 +502,7 @@
     scheduled = true
     requestAnimationFrame(() => {
       scheduled = false
+      syncGuideLogin()
       syncTabs()
       restoreDashboard()
       syncViewMotion()
@@ -468,7 +525,7 @@
     syncTabs()
     restoreDashboard()
     syncViewMotion()
-    observer.observe(container, {childList: true, subtree: true, attributes: true, attributeFilter: ['aria-selected', 'hidden', 'style', 'class']})
+    observer.observe(container, {childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['aria-selected', 'hidden', 'style', 'class', 'disabled']})
     try { dismissed = localStorage.getItem(guideKey) === 'dismissed' } catch {}
     if (!resumeGuide() && !dismissed) setTimeout(() => showGuide(), 150)
   }

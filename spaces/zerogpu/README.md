@@ -31,6 +31,12 @@ compare its answers with the baseline.
 
 ## Using your Hugging Face account
 
+When this app is embedded on Hugging Face, signing in opens the standalone
+workbench in a new tab. Continue there to keep your session, including in Safari.
+The embedded view can still show a sign-in button because its browser cookies
+are separate. You do not need to disable cross-site tracking protection.
+
+
 1. **Choose the target model.** Select the small model to edit. The frontier
    editor is a separate model selected in Runtime.
 2. **Define the behaviour.** Start with your own objective or load a complete

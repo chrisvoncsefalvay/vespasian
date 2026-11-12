@@ -74,7 +74,17 @@ Turn selection and sample filtering have their own CPU callback. They update
 the session's display selection without advancing the model or changing the
 controller configuration. A pinned selection survives later timer updates.
 The first-use guide stores its dismissal flag in browser local storage and a
-short-lived OAuth-return marker in session storage. Neither contains credentials.
+short-lived OAuth-return marker in session storage. Embedded sign-in opens the
+standalone Space in a new tab, using the Hub iframe's permitted popup route.
+The OAuth callback and workbench then use first-party cookies, including in
+Safari. The original embedded view can remain signed out; its helper link lets
+the visitor reopen the standalone workbench. No browser privacy setting changes
+are needed. Login, callback, state validation and logout remain Gradio's routes.
+
+A guide login carries only a one-time display flag in the return URL because a
+new tab with no opener does not share session storage. The app removes that flag
+from browser history immediately. Neither marker contains credentials. Guide
+labels follow the native login control after its asynchronous status check.
 
 ## Local staging and checks
 
@@ -86,6 +96,22 @@ python3 -m unittest discover -s spaces/zerogpu -p 'test_package_space.py' -v
 python3 spaces/zerogpu/package_space.py build --output dist/zerogpu-space
 python3 spaces/zerogpu/package_space.py verify dist/zerogpu-space
 ```
+
+Run the OAuth browser regression with the Space runtime, Playwright's Chromium
+and WebKit browsers, and OpenSSL available:
+
+```bash
+python -m playwright install chromium webkit
+python scripts/check_space_oauth.py
+```
+
+This check uses an isolated HTTPS app with the real Gradio session middleware
+and a dummy OAuth provider. It covers direct and embedded account/guide login,
+the Hub's iframe sandbox permissions, cancelled popup retries, blocked-popup
+fallback, delayed account status, continued guide navigation without logout,
+and direct/embedded logout. Browser requests to external services
+and experiment/publication callbacks are blocked. It does not prove a live
+Hugging Face token exchange; verify that separately with an authorized account.
 
 Use a fresh output directory for each build. Staging does not overwrite existing
 directories. `--allow-dirty` permits local inspection while files are being
