@@ -156,3 +156,43 @@ The `zerogpu-space` branch receives changes from `main` through the deployment
 workflow. Every deployment bundles the Rust controller and Python model engine
 from the same commit. `PROVENANCE.json` records the source revision and file hashes.
 The Space application lives outside the published Cargo crate.
+
+
+### Read-only API status and allocation receipts
+
+Use the same Gradio client session that started the run. The public `/status`
+endpoint takes no arguments and returns a JSON snapshot, a final run ZIP, and
+a compact patch ZIP (files are null until available). It does not advance the
+controller, request a GPU, call the editor, drain events, refresh the five-minute
+idle timeout, or restart a finished run. Missing, expired, and foreign sessions
+receive the same error. Downloads remain available within the existing two-hour
+retention window; they are served using Gradio's normal File mechanism.
+
+The public `/cancel` endpoint takes no arguments and requests the existing safe
+stop procedure. It is idempotent. An in-flight operation must release model state
+before the controller cleans up and publishes final artifacts. Cancellation is
+not a guarantee of immediate GPU release. Poll `/status` for `finished`; polling
+does not keep an abandoned run alive. Reuse the same client/session rather than
+opening a new client, since the run belongs to its originating Gradio session.
+
+`gpu_allocations` is separate from the frontier editor's dollar budget. Each
+attempt records an opaque allocation ID, an opaque request correlation ID,
+operation, attempt number, exact `estimate_duration` bound, configured GPU size
+(currently large, 1x quota), and client-observed wall time. The reservation is
+recorded before the scheduler is called, but only after an allocation boundary
+is resumed. CPU polls and unresumed or cancelled boundaries add no reservation.
+The final run ZIP includes `gpu-allocations.json`.
+
+Receipt states are `attempted` (scheduler call outstanding), `completed`
+(scheduler stream ended normally), `rejected` (known expired-proxy rejection
+before execution), and `uncertain` (exception or generator closure). A completed
+stream can contain a failed operation: consult `operation_ok`. Retry attempts
+get separate allocation IDs and require another `/advance` request.
+`declared_max_seconds_exposure` conservatively sums every attempt except known
+rejections, including outstanding and uncertain attempts. Neither this bound nor
+`wall_seconds` is measured GPU usage, an actual charge, or an HF credit balance.
+Receipts contain no request payloads, headers, credentials, or filesystem paths.
+
+`ready_for_allocation` reports a known paused boundary only. False does not
+promise that the next `/advance` is CPU-only: the controller may enqueue a new
+operation concurrently. Every `/advance` still performs at most one allocation.

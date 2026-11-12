@@ -162,6 +162,8 @@ class Run:
                          **config}
         self.config = {key: value for key, value in public_config.items() if key in PUBLIC_FIELDS}
         self.secrets = tuple(value for value in (token, config.get("api_key")) if value)
+        self.config = self.redact(self.config)
+        self.allocations = {}
         self.started = time.monotonic()
         self.events = []
         self.status = "preparing"
@@ -195,6 +197,32 @@ class Run:
         if isinstance(value, list):
             return [self.redact(item) for item in value]
         return value
+
+    def observe_allocation(self, receipt):
+        """Store scheduler receipts separately from frontier inference dollars."""
+        with self.state_lock:
+            self.allocations[receipt["allocation_id"]] = dict(receipt)
+
+    def snapshot(self):
+        """Read retained state only. Never drain, allocate, or refresh last_seen."""
+        with self.state_lock:
+            state = self.state()
+            receipts = [dict(value) for value in self.allocations.values()]
+            state["gpu_allocations"] = {
+                "receipts": receipts,
+                "attempt_count": len(receipts),
+                "declared_max_seconds_exposure": sum(
+                    row["requested_max_duration_seconds"] for row in receipts
+                    if row["status"] != "rejected"
+                ),
+                "billing_note": "Declared scheduler bounds, not billed GPU time or Hugging Face credits. Wall seconds are client-observed elapsed time.",
+            }
+            state["ready_for_allocation"] = bool(
+                self.at_allocation_boundary and not self.advance_lock.locked()
+                and not self.finished and not self.cancelled.is_set()
+            )
+            state["cancellation_requested"] = self.cancelled.is_set()
+            return state
 
     def state(self):
         with self.state_lock:
@@ -251,7 +279,10 @@ class Run:
                     break
 
     def stop(self):
-        self.cancelled.set()
+        with self.state_lock:
+            if self.finished or self.cancelled.is_set():
+                return
+            self.cancelled.set()
         if self.process and self.process.poll() is None:
             try:
                 self.process.send_signal(signal.SIGINT)
@@ -261,6 +292,9 @@ class Run:
     def bundle(self):
         if not self.output.is_dir():
             return None
+        (self.output / "gpu-allocations.json").write_text(
+            json.dumps(self.snapshot()["gpu_allocations"], indent=2) + "\n"
+        )
         for receipt in self.root.glob("*-source.json"):
             shutil.copy2(receipt, self.output / receipt.name)
         journal = self.output / "patches"
@@ -391,7 +425,7 @@ class Run:
                     yield self.state()
                     return
                 self.pending_request = request
-                self.pending_dispatch = iter(dispatch(str(request.state_dir), request.payload, boundaries=True))
+                self.pending_dispatch = iter(dispatch(str(request.state_dir), request.payload, boundaries=True, observe=self.observe_allocation))
             request = self.pending_request
             # A previous callback may already have consumed the next marker.
             allocated = self.at_allocation_boundary
@@ -442,6 +476,8 @@ class Run:
 
 
 def begin(owner, config, token=False):
+    if not isinstance(owner, str) or not owner:
+        raise ValueError("Start a run in this session first")
     validate(config)
     if config.get("patch_backup") and not token:
         raise ValueError("Private patch backup requires an explicitly supplied session token")
@@ -459,8 +495,9 @@ def begin(owner, config, token=False):
 
 
 def get_run(owner, state):
-    run = RUNS.get((state or {}).get("run_id", ""))
-    if run is None or run.owner != owner:
+    run_id = state.get("run_id") if isinstance(state, dict) else None
+    run = RUNS.get(run_id) if isinstance(run_id, str) else None
+    if not isinstance(owner, str) or not owner or run is None or run.owner != owner:
         raise ValueError("Start a run in this session first")
     return run
 

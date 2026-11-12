@@ -366,7 +366,7 @@ class RuntimeTests(unittest.TestCase):
         credential = contextvars.ContextVar("test_credential")
         used, calls = [], []
 
-        def dispatch(directory, payload, *, boundaries):
+        def dispatch(directory, payload, *, boundaries, observe):
             self.assertTrue(boundaries)
             calls.append((directory, payload))
             for batch in range(3):
@@ -555,6 +555,72 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(run.secrets, ())
         bridge.close.assert_called_once()
         self.assertFalse((run.root / "home").exists())
+
+    def test_status_is_read_only_and_does_not_refresh_idle_timeout(self):
+        run, request = self.make_pending_run()
+        run.last_seen = 123
+        run.at_allocation_boundary = True
+        run.messages.put({"type": "phase", "message": "not drained"})
+        with patch.object(run, "advance", side_effect=AssertionError("allocation")), \
+             patch.object(run, "start", side_effect=AssertionError("frontier")), \
+             patch.object(run, "drain", side_effect=AssertionError("mutation")):
+            snapshot = run.snapshot()
+        self.assertEqual(run.last_seen, 123)
+        self.assertEqual(run.messages.qsize(), 1)
+        run.bridge.next.assert_not_called()
+        self.assertTrue(snapshot["ready_for_allocation"])
+        self.assertEqual(snapshot["gpu_allocations"]["attempt_count"], 0)
+
+    def test_access_failures_are_uniform_including_missing_owner(self):
+        run = runtime.Run("session-a", self.config)
+        self.addCleanup(shutil.rmtree, run.root)
+        with patch.dict(runtime.RUNS, {run.id: run}, clear=True):
+            for owner, state in [(None, {"run_id": run.id}), ("", {"run_id": run.id}),
+                                 ("other", {"run_id": run.id}), ("session-a", None),
+                                 ("session-a", {"run_id": []}), ("session-a", []),
+                                 ("session-a", {"run_id": "missing"})]:
+                with self.subTest(owner=owner, state=state):
+                    with self.assertRaisesRegex(ValueError, "^Start a run in this session first$"):
+                        runtime.get_run(owner, state)
+
+    def test_cancel_is_idempotent_and_does_not_touch_terminal_run(self):
+        run, request = self.make_pending_run()
+        run.process = Mock()
+        run.process.poll.return_value = None
+        run.stop()
+        run.stop()
+        run.process.send_signal.assert_called_once()
+        run.finished = True
+        run.cancelled.clear()
+        run.stop()
+        self.assertFalse(run.cancelled.is_set())
+
+    def test_receipts_are_independent_of_frontier_budget_and_in_final_bundle(self):
+        run, request = self.make_pending_run()
+        run.report = {"budget": {"spent_usd": 0.2}}
+        for index, status in enumerate(("completed", "uncertain", "rejected", "attempted")):
+            run.observe_allocation({"allocation_id": str(index), "status": status,
+                                    "requested_max_duration_seconds": 60})
+        snapshot = run.snapshot()
+        self.assertEqual(snapshot["gpu_allocations"]["attempt_count"], 4)
+        self.assertEqual(snapshot["gpu_allocations"]["declared_max_seconds_exposure"], 180)
+        self.assertEqual(snapshot["report"]["budget"]["spent_usd"], 0.2)
+        snapshot["gpu_allocations"]["receipts"][0]["status"] = "changed"
+        self.assertEqual(run.snapshot()["gpu_allocations"]["receipts"][0]["status"], "completed")
+        run.output.mkdir()
+        archive = run.bundle()
+        with runtime.zipfile.ZipFile(archive) as bundle:
+            recorded = json.loads(bundle.read("vespasian/gpu-allocations.json"))
+        self.assertEqual(recorded["attempt_count"], 4)
+
+    def test_cpu_poll_records_no_allocation(self):
+        run, request = self.make_pending_run()
+        run.bridge.next = Mock(return_value=None)
+        dispatch = Mock(side_effect=AssertionError("must not allocate"))
+        list(run.advance(dispatch))
+        self.assertEqual(run.snapshot()["gpu_allocations"]["attempt_count"], 0)
+        dispatch.assert_not_called()
+
 
 
 if __name__ == "__main__":

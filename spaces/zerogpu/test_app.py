@@ -3,6 +3,7 @@
 import importlib
 import json
 import os
+import shutil
 from pathlib import Path
 import tempfile
 import unittest
@@ -302,6 +303,61 @@ class AppRequestTests(unittest.IsolatedAsyncioTestCase):
             )
             results.append(result)
         return results
+
+    def test_status_and_cancel_are_public_supported_apis(self):
+        api = self.demo.get_api_info()["named_endpoints"]
+        for name in ("/status", "/cancel"):
+            self.assertIn(name, api)
+            self.assertEqual(api[name]["parameters"], [])
+        for name in ("status", "cancel"):
+            self.assertFalse(self.callbacks[name].queue)
+            self.assertEqual(self.callbacks[name].api_visibility, "public")
+
+    async def test_status_and_cancel_require_same_owner_and_status_has_no_side_effects(self):
+        runtime = self.app.runtime
+        run = runtime.Run("visitor-a", {"api_key": "private-key", "goal": "private-key"})
+        self.addCleanup(shutil.rmtree, run.root, ignore_errors=True)
+        self.session[self.controls["state"]._id] = {"run_id": run.id}
+        run.last_seen = 42
+        with patch.dict(runtime.RUNS, {run.id: run}, clear=True), \
+             patch.object(run, "start", side_effect=AssertionError("frontier")), \
+             patch.object(run, "advance", side_effect=AssertionError("GPU")), \
+             patch.object(run, "drain", side_effect=AssertionError("mutation")):
+            result = (await self.call("status", self.request()))[-1]["data"]
+            result[0] = result[0].root
+            self.assertFalse(result[0]["finished"])
+            self.assertEqual(result[1:], [None, None])
+            self.assertEqual(run.last_seen, 42)
+            self.assertNotIn("private-key", json.dumps(result))
+            for name in ("status", "cancel"):
+                for owner in ("visitor-b", None, ""):
+                    with self.assertRaisesRegex(ValueError, "^Start a run in this session first$"):
+                        await self.call(name, self.request(owner=owner))
+            self.assertFalse(run.cancelled.is_set())
+            await self.call("cancel", self.request())
+            await self.call("cancel", self.request())
+            self.assertTrue(run.cancelled.is_set())
+            self.assertEqual(run.last_seen, 42)
+
+    async def test_terminal_status_delivers_artifacts_without_restart(self):
+        runtime = self.app.runtime
+        run = runtime.Run("visitor-a", {})
+        self.addCleanup(shutil.rmtree, run.root, ignore_errors=True)
+        run.output.mkdir()
+        (run.output / "report.json").write_text('{"reload_verified":true}')
+        run.bundle()
+        run.load_report()
+        run.finished = True
+        run.finished_at = run.started + 1
+        self.session[self.controls["state"]._id] = {"run_id": run.id}
+        with patch.dict(runtime.RUNS, {run.id: run}, clear=True), \
+             patch.object(run, "advance", side_effect=AssertionError("GPU")):
+            result = (await self.call("status", self.request()))[-1]["data"]
+            result[0] = result[0].root
+        self.assertTrue(result[0]["report"]["reload_verified"])
+        self.assertTrue(result[0]["finished"])
+        self.assertEqual(result[1]["orig_name"], run.archive.name)
+        self.assertIsNone(result[2])
 
     def test_timer_uses_new_queued_events_without_building_a_backlog(self):
         function = self.callbacks["advance"]

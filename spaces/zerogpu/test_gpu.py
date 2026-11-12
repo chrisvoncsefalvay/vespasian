@@ -682,6 +682,171 @@ class GPUStateTests(unittest.TestCase):
         self.assertFalse(invalid[-1]["ok"])
         self.assertIn("512", invalid[-1]["error"])
 
+class AllocationReceiptTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.directory = self.temporary.name
+        self.request = {"id": "secret-id", "command": "init", "token": "secret-token"}
+        self.receipts = []
+
+    def dispatch(self):
+        return gpu.dispatch(self.directory, self.request, boundaries=True, observe=self.receipts.append)
+
+    def test_receipt_precedes_scheduler_and_uses_exact_bound(self):
+        def scheduler(directory, request):
+            self.assertEqual(self.receipts[-1]["status"], "attempted")
+            self.assertEqual(self.receipts[-1]["requested_max_duration_seconds"],
+                             gpu.estimate_duration(directory, request))
+            yield {"type": "result", "ok": True}
+        with patch.object(gpu, "_gpu_dispatch", side_effect=scheduler):
+            iterator = self.dispatch()
+            self.assertEqual(next(iterator), {"type": "gpu_allocation"})
+            self.assertEqual(self.receipts, [])
+            list(iterator)
+        first, last = self.receipts
+        self.assertEqual(first["allocation_id"], last["allocation_id"])
+        self.assertEqual(last["status"], "completed")
+        self.assertTrue(last["operation_ok"])
+        self.assertLessEqual(last["requested_max_duration_seconds"], 120)
+        self.assertEqual((last["gpu_size"], last["quota_multiplier"]), ("large", 1))
+        self.assertGreaterEqual(last["wall_seconds"], 0)
+        encoded = json.dumps(self.receipts)
+        for secret in ("secret-id", "secret-token", self.directory):
+            self.assertNotIn(secret, encoded)
+
+    def test_proxy_retry_has_new_boundary_and_unique_receipt(self):
+        attempts = []
+        def scheduler(*args):
+            attempts.append(True)
+            if len(attempts) == 1:
+                raise RuntimeError("Expired ZeroGPU proxy token")
+            yield {"type": "result", "ok": True}
+        with patch.object(gpu, "_gpu_dispatch", side_effect=scheduler):
+            iterator = self.dispatch()
+            next(iterator)
+            self.assertEqual(next(iterator), {"type": "gpu_allocation"})
+            self.assertEqual(len(attempts), 1)
+            self.assertEqual(self.receipts[-1]["status"], "rejected")
+            list(iterator)
+        self.assertEqual([r["attempt"] for r in self.receipts], [1, 1, 2, 2])
+        self.assertNotEqual(self.receipts[0]["allocation_id"], self.receipts[2]["allocation_id"])
+        self.assertEqual(self.receipts[0]["request_id"], self.receipts[2]["request_id"])
+        self.assertEqual(self.receipts[-1]["status"], "completed")
+
+    def test_failure_and_close_keep_uncertain_attempt_but_unresumed_has_none(self):
+        def scheduler(*args):
+            yield {"type": "sample"}
+            raise RuntimeError("secret-token")
+        with patch.object(gpu, "_gpu_dispatch", side_effect=scheduler) as dispatch:
+            iterator = self.dispatch()
+            next(iterator)
+            iterator.close()
+            self.assertEqual(self.receipts, [])
+            dispatch.assert_not_called()
+            iterator = self.dispatch()
+            next(iterator)
+            next(iterator)
+            iterator.close()
+            self.assertEqual(self.receipts[-1]["status"], "uncertain")
+            self.receipts.clear()
+            list(self.dispatch())
+            self.assertEqual(self.receipts[-1]["status"], "uncertain")
+            self.assertNotIn("secret-token", json.dumps(self.receipts))
+
+    def test_bound_failure_happens_before_attempt_and_scheduler(self):
+        with patch.object(gpu, "estimate_duration", side_effect=ValueError("invalid bound")), \
+             patch.object(gpu, "_gpu_dispatch") as scheduler:
+            events = list(self.dispatch())
+        scheduler.assert_not_called()
+        self.assertEqual(self.receipts, [])
+        self.assertFalse(events[-1]["ok"])
+
+    def test_second_proxy_rejection_does_not_hide_a_third_attempt(self):
+        with patch.object(gpu, "_gpu_dispatch", side_effect=RuntimeError("Expired ZeroGPU proxy token")) as scheduler:
+            events = list(self.dispatch())
+        self.assertEqual(scheduler.call_count, 2)
+        self.assertEqual(sum(event["type"] == "gpu_allocation" for event in events), 2)
+        self.assertEqual([r["status"] for r in self.receipts], ["attempted", "rejected"] * 2)
+        self.assertFalse(events[-1]["ok"])
+
+    def test_failed_operation_is_retained_as_completed_stream_not_success(self):
+        with patch.object(gpu, "_gpu_dispatch", return_value=iter([{"type": "result", "ok": False}])):
+            list(self.dispatch())
+        self.assertEqual(self.receipts[-1]["status"], "completed")
+        self.assertFalse(self.receipts[-1]["operation_ok"])
+
+    def make_run(self):
+        import runtime
+        from bridge import Request
+        import shutil
+        from unittest.mock import Mock
+        run = runtime.Run("owner", {})
+        self.addCleanup(shutil.rmtree, run.root, ignore_errors=True)
+        self.addCleanup(run._clear_dispatch)
+        request = Request(run.root / "engines/test", {"id": 1, "command": "init"})
+        run.bridge = SimpleNamespace(next=Mock(side_effect=[request, None]))
+        return run
+
+    def test_runtime_retry_requires_new_advance_and_cpu_poll_adds_nothing(self):
+        run = self.make_run()
+        attempts = []
+        def scheduler(*args):
+            attempts.append(True)
+            if len(attempts) == 1:
+                raise RuntimeError("Expired ZeroGPU proxy token")
+            yield {"type": "result", "ok": True}
+        with patch.object(gpu, "_gpu_dispatch", side_effect=scheduler):
+            list(run.advance(gpu.dispatch))
+            first = run.snapshot()
+            self.assertEqual(len(attempts), 1)
+            self.assertEqual(first["gpu_allocations"]["attempt_count"], 1)
+            self.assertEqual(first["gpu_allocations"]["declared_max_seconds_exposure"], 0)
+            self.assertTrue(first["ready_for_allocation"])
+            list(run.advance(gpu.dispatch))
+            list(run.advance(gpu.dispatch))
+        final = run.snapshot()["gpu_allocations"]
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(final["attempt_count"], 2)
+        self.assertEqual(final["declared_max_seconds_exposure"], 60)
+        self.assertEqual([r["status"] for r in final["receipts"]], ["rejected", "completed"])
+
+    def test_inflight_cancel_preserves_state_until_operation_releases(self):
+        run = self.make_run()
+        entered, release = threading.Event(), threading.Event()
+        def scheduler(*args):
+            entered.set()
+            self.assertTrue(release.wait(3))
+            yield {"type": "sample"}
+        with patch.object(gpu, "_gpu_dispatch", side_effect=scheduler):
+            thread = threading.Thread(target=lambda: list(run.advance(gpu.dispatch)))
+            thread.start()
+            try:
+                self.assertTrue(entered.wait(3))
+                run.stop()
+                run.stop()
+                snapshot = run.snapshot()
+                self.assertTrue(snapshot["cancellation_requested"])
+                self.assertFalse(snapshot["ready_for_allocation"])
+                self.assertEqual(snapshot["gpu_allocations"]["receipts"][0]["status"], "attempted")
+                self.assertTrue(run.advance_lock.locked())
+                self.assertTrue(run.root.exists())
+            finally:
+                release.set()
+                thread.join(3)
+            self.assertFalse(thread.is_alive())
+            run._clear_dispatch()
+        self.assertEqual(run.snapshot()["gpu_allocations"]["receipts"][0]["status"], "uncertain")
+        self.assertFalse(run.advance_lock.locked())
+
+    def test_cpu_only_and_invalid_request_do_not_reserve(self):
+        with patch.object(gpu, "_stream", return_value=iter([{"type": "result", "ok": True}])), \
+             patch.object(gpu, "_gpu_dispatch", side_effect=AssertionError("GPU")):
+            list(gpu.dispatch(self.directory, {"command": "shutdown"}, observe=self.receipts.append))
+            list(gpu.dispatch(self.directory, None, observe=self.receipts.append))
+        self.assertEqual(self.receipts, [])
+
+
 
 if __name__ == "__main__":
     unittest.main()

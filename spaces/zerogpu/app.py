@@ -302,6 +302,15 @@ def create_app():
             state = run.state()
         return selection, render_dashboard(state, selection)
 
+    def status(state, request: gr.Request):
+        """Read this session's run without advancing or keeping it alive."""
+        run = runtime.get_run(request.session_hash, state)
+        snapshot = run.snapshot()
+        # Only existing terminal artifacts enter Gradio's File delivery path.
+        files = [str(path) if snapshot["finished"] and isinstance(path, Path) and path.is_file() else None
+                 for path in (run.archive, run.patch_archive)]
+        return snapshot, *files
+
     def stop(state, request: gr.Request):
         run = runtime.get_run(request.session_hash, state)
         run.stop()
@@ -450,7 +459,12 @@ def create_app():
         controls["run_button"].click(start, inputs=all_inputs, outputs=run_outputs, api_name="run", concurrency_limit=runtime.MAX_ACTIVE)
         controls["run_timer"].tick(advance, inputs=[controls["state"], controls["selection"]], outputs=run_outputs, api_name="advance", api_visibility="undocumented", queue=True, trigger_mode="once", show_progress="hidden", concurrency_limit=runtime.MAX_ACTIVE, concurrency_id="gpu-allocations")
         controls["selection_submit"].click(select_turn, inputs=[controls[name] for name in ("state", "selection_input", "selection")], outputs=[controls["selection"], controls["dashboard_html"]], queue=False, api_name=False, show_progress="hidden")
-        controls["stop_button"].click(stop, inputs=controls["state"], outputs=controls["status"], queue=False, api_name=False)
+        controls["stop_button"].click(stop, inputs=controls["state"], outputs=controls["status"], queue=False, api_name="cancel")
+        status_button = gr.Button(visible=False)
+        status_json = gr.JSON(visible=False)
+        status_download = gr.File(visible=False)
+        status_patches = gr.File(visible=False)
+        status_button.click(status, inputs=controls["state"], outputs=[status_json, status_download, status_patches], queue=False, api_name="status")
         controls["new_experiment"].click(new_experiment, inputs=controls["state"], outputs=[controls["setup_panel"], controls["monitor_panel"], controls["setup_tabs"]], queue=False, api_name=False)
         controls["return_results"].click(lambda: (gr.update(visible=False), gr.update(visible=True)), outputs=[controls["setup_panel"], controls["monitor_panel"]], queue=False, api_name=False)
         controls["publish_patches_button"].click(publish_patches, inputs=[controls[name] for name in ("state", "patch_save_repo", "patch_save_consent", "patch_save_create", "hf_token")], outputs=controls["publish_status"], api_name=False, concurrency_limit=2)

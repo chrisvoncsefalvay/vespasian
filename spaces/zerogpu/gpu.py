@@ -20,6 +20,7 @@ import queue
 import re
 import sys
 import threading
+import time
 from types import MappingProxyType
 import uuid
 
@@ -47,6 +48,8 @@ MAX_TOTAL_EXAMPLES = int(os.environ.get("VESPASIAN_SPACE_MAX_TOTAL_EXAMPLES", "2
 _LIMITS = space_limits()
 MAX_NEW_TOKENS = _LIMITS["max_new_tokens"]
 MAX_SEQ_LENGTH = _LIMITS["max_seq_length"]
+GPU_SIZE = "large"
+GPU_QUOTA_MULTIPLIER = 1  # spaces.zero.client: xlarge is 2x, large is 1x.
 _FORMAT = 1
 _GENERATION = re.compile(r"[0-9a-f]{32}\Z")
 _COMMANDS = {"init", "inspect", "probe_activations", "evaluate", "health", "edit", "accept", "rollback", "save", "shutdown", "patch_init", "patch_candidate", "patch_finalize", "patch_restore", "patch_export"}
@@ -589,28 +592,53 @@ def _stream(state_dir, request):
         thread.join()
 
 
-@spaces.GPU(duration=estimate_duration, size="large")
+@spaces.GPU(duration=estimate_duration, size=GPU_SIZE)
 def _gpu_dispatch(state_dir: str, request: dict):
     yield from _stream(state_dir, request)
 
 
-def _scheduled_dispatch(state_dir, request, *, boundaries):
+def _scheduled_dispatch(state_dir, request, *, boundaries, observe=None):
     """Let the caller obtain a fresh browser request before each allocation."""
+    request_id = uuid.uuid4().hex  # Opaque correlation, never the raw protocol payload.
     for attempt in range(2 if boundaries else 1):
         if boundaries:
             yield {"type": "gpu_allocation"}
+        # Resuming the boundary reserves an attempt; polling or closing does not.
+        receipt = {
+            "allocation_id": uuid.uuid4().hex, "request_id": request_id,
+            "operation": request.get("command") if request.get("command") in _COMMANDS else "unknown",
+            "attempt": attempt + 1,
+            "requested_max_duration_seconds": estimate_duration(state_dir, request),
+            "gpu_size": GPU_SIZE, "quota_multiplier": GPU_QUOTA_MULTIPLIER,
+            "status": "attempted", "wall_seconds": None,
+        }
+        # Record the bound BEFORE invoking the scheduler. This is not billing.
+        if observe:
+            observe(dict(receipt))
+        started_at = time.monotonic()
         started = False
+        outcome = "uncertain"
+        operation_ok = None
         try:
             for event in _gpu_dispatch(state_dir, request):
                 started = True
+                if event.get("type") == "result":
+                    operation_ok = bool(event.get("ok"))
                 yield event
+            outcome = "completed"
             return
         except Exception as error:
             message = getattr(error, "message", str(error))
-            if not boundaries or attempt or started or message != "Expired ZeroGPU proxy token":
+            expired = not started and message == "Expired ZeroGPU proxy token"
+            if expired:
+                outcome = "rejected"
+            if not boundaries or attempt or not expired:
                 raise
-            # Scheduling failed before model execution. The next boundary gives
-            # the browser a chance to submit fresh credentials before retrying.
+            # Retry only at a new browser boundary with fresh credentials.
+        finally:
+            receipt.update(status=outcome, operation_ok=operation_ok, wall_seconds=max(0, time.monotonic() - started_at))
+            if observe:
+                observe(dict(receipt))
 
 
 def _write_journal(path, value):
@@ -651,16 +679,16 @@ def _aggregate(parts):
     return result
 
 
-def _batched_dispatch(state_dir, request, *, boundaries=False):
+def _batched_dispatch(state_dir, request, *, boundaries=False, observe=None):
     directory = Path(state_dir)
     metadata, _ = _read_metadata(directory)
     _validate_bounds(request, metadata)
     if metadata is None:
-        yield from _scheduled_dispatch(state_dir, request, boundaries=boundaries)
+        yield from _scheduled_dispatch(state_dir, request, boundaries=boundaries, observe=observe)
         return
     total = len(_selected_rows(request, metadata["engine"]))
     if not total:
-        yield from _scheduled_dispatch(state_dir, request, boundaries=boundaries)
+        yield from _scheduled_dispatch(state_dir, request, boundaries=boundaries, observe=observe)
         return
     # Keep a retryable receipt outside the GPU boundary after each allocation.
     # Version binding prevents an old evaluation from observing newer edits.
@@ -682,7 +710,7 @@ def _batched_dispatch(state_dir, request, *, boundaries=False):
                 continue
             batch_request = {**request, "id": f"{request.get('id')}:batch:{offset}", "_space_batch": {"offset": offset, "count": min(batch_size, total - offset), "total": total, "model_version": metadata["model_version"]}}
             events, result = [], None
-            for event in _scheduled_dispatch(state_dir, batch_request, boundaries=boundaries):
+            for event in _scheduled_dispatch(state_dir, batch_request, boundaries=boundaries, observe=observe):
                 if event.get("type") == "gpu_allocation":
                     yield event
                 elif event.get("type") == "result":
@@ -702,12 +730,14 @@ def _batched_dispatch(state_dir, request, *, boundaries=False):
         yield {"type": "result", "id": request.get("id"), "ok": True, "data": _aggregate(parts)}
 
 
-def dispatch(state_dir: str, request: dict, *, boundaries=False):
+def dispatch(state_dir: str, request: dict, *, boundaries=False, observe=None):
     """Stream protocol events, optionally pausing before each GPU allocation.
 
     With boundaries enabled, the caller must consume ``gpu_allocation`` markers
     itself and resume at most one allocation in each fresh queued browser event.
     Markers are never persisted in evaluation journals or worker receipts.
+    The optional observe callback runs on the CPU, before and after scheduler
+    attempts, including generator closure. It must not raise or perform I/O.
     """
     try:
         if not isinstance(request, dict):
@@ -715,8 +745,8 @@ def dispatch(state_dir: str, request: dict, *, boundaries=False):
         if request.get("command") in {"accept", "rollback", "shutdown", "patch_finalize", "patch_export"}:
             yield from _stream(state_dir, request)
         elif request.get("command") in {"evaluate", "health"}:
-            yield from _batched_dispatch(state_dir, request, boundaries=boundaries)
+            yield from _batched_dispatch(state_dir, request, boundaries=boundaries, observe=observe)
         else:
-            yield from _scheduled_dispatch(state_dir, request, boundaries=boundaries)
+            yield from _scheduled_dispatch(state_dir, request, boundaries=boundaries, observe=observe)
     except Exception as error:
         yield {"type": "result", "id": request.get("id") if isinstance(request, dict) else None, "ok": False, "error": str(error)}
