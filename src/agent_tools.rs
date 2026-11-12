@@ -1,6 +1,7 @@
 //! Small discovery surface and bounded, read-only tools shared by CLI and Space.
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 const PAGE: usize = 8;
@@ -215,7 +216,7 @@ pub fn behavior_summary(evaluation: &Value) -> Value {
 }
 pub fn discovery(catalogue: &Value) -> Value {
     let cards: Vec<_> = catalogue["cards"].as_array().into_iter().flatten().map(|c| json!({"id":c["id"],"operations":c["operations"],"use_when":short(&c["when_to_use"],160),"available":true})).collect();
-    json!({"skills":cards,"available_operations":catalogue["available_operations"],"unavailable":[{"id":"rome","reason":"Not implemented: requires causal localisation, covariance statistics and optimised latent targets."},{"id":"memit","reason":"Not implemented: requires multi-layer covariance solves and optimised latent targets."},{"id":"patch_arithmetic","reason":"Agent-directed patch composition/negation is not implemented. Saved journal patches can be replayed by the materialize-patch utility; repeating an edit is not patch arithmetic."}],"tools":[{"name":"read_skill","purpose":"Load optional focused guidance for one suggested strategy."},{"name":"inspect_targets","purpose":"Read eight supported tensors; query matches name, alias, role or operation."},{"name":"inspect_probe_modules","purpose":"Read eight supported ordinary Linear modules and dimensions. Query filters module names. Probe activations on explicit non-test row IDs, source (prompt/reference/generation) and bounded token positions."},{"name":"probe_activations","purpose":"Measure selected module activations for up to 8 non-test contexts and optional contrasts. Read-only, produces bounded statistics and reusable direction handles, not full vectors. Set the structured probe field; null for other actions."},{"name":"inspect_tokens","purpose":"Inspect tokenizer-grounded IDs and norms; optional query tokenizes one text up to 256 characters; offset pages eight candidates."},{"name":"read_history","purpose":"Read eight measured candidate outcomes and preservation/control decisions."},{"name":"read_rollouts","purpose":"Empty query: eight non-test previews with row IDs, generation counts and finish reasons. Query a row ID, optionally /prompt, /target or /prediction (default), to page full text in 2048-character chunks; offset is then a character offset."},{"name":"read_behavior","purpose":"Read eight non-test row diagnostics and evidence. Query a signal name, split or row ID to filter. Counts describe observations, not semantic judgments or acceptance scores."},{"name":"propose","purpose":"Submit one bounded edit for controller validation, application, testing and keep/revert."},{"name":"stop","purpose":"End search without another edit, explaining why."}],"operation_contracts":{"scale":"MLP: W*(1+strength).","low_rank":"MLP: seeded low-rank direction, rank1–16, relative norm abs(strength).","noise":"MLP: seeded full-rank direction, relative norm abs(strength).","activation_rank_one":"MLP: forward reference keys with target-minus-predicted embedding directions; rank selects examples.","activation_preserve":"MLP: contrastive reference direction projected off measured preserve-key span; requires edit/preserve references and positive strength.","direction_projection":"One inspected eligible MLP weight and matching measured direction_id: strength0.000001–16, rank1, and1–256 inspected column indices. Actual stored relative norm after dtype rounding must satisfy the run max_relative_norm. Handles are evidence, not proof the direction causes the failure.","token_row_scale":"One table: multiply inspected non-special destination rows by1+strength; empty sources.","token_row_interpolate":"One table: positive bounded blend toward paired inspected source IDs; distinct source/destination; stored-row norm bound may reduce fraction.","token_row_residual":"Supported output table: positive measured target-minus-probability head-input residual on inspected edit_reference rows; rank selects examples; empty sources."},"edit_contract":"Only available_operations may be used, and inspected targets must support them. Other operation contracts describe capabilities that this model/dataset may not have. Except direction_projection, strength magnitude0.000001–0.1 and rank1–16. Direction_projection requires strength0.000001–16, rank1, one inspected target, a matching measured direction handle and1–256 selected in-range columns; actual stored relative norm after dtype rounding must satisfy the run max_relative_norm. MLP operations use empty token selectors. Row operations one canonical table and1–32 inspected non-special IDs. Tied aliases are one physical edit affecting both roles. Proposed writes are tested before retention. Use provided tools before considering unsupported custom gradient optimisers; arbitrary code/autograd/training is not available.","instructions":"Skills are optional suggestions, not a strategy whitelist. Inspect needed targets/tokens, then propose an available operation with your own concise strategy, plan and measured rationale. Read a skill only when its guidance helps. Tools are read-only and paginated (8 entries). Use query to filter target names/aliases/roles/operations, or inspect one token text (up to 256 characters) with the current tokenizer. An empty token query pages the current view; a new text replaces it. Use offset to page. Start with the measured behavior summary, then read_behavior and full-text rollout pages to inspect failures. Choose probes and model-level changes from that evidence, not a fixed task menu. Explain the public evidence and hypothesis concisely, without private chain-of-thought. Read history for previous outcomes. Do not request the entire manifest. Tool calls consume frontier budget; stop if no justified candidate remains. The selected skill, latest target/token pages and latest other tool result remain in context. Older pages are not replayed; fetch another page when needed."})
+    json!({"skills":cards,"available_operations":catalogue["available_operations"],"unavailable":[{"id":"rome","reason":"Not implemented: requires causal localisation, covariance statistics and optimised latent targets."},{"id":"memit","reason":"Not implemented: requires multi-layer covariance solves and optimised latent targets."},{"id":"patch_arithmetic","reason":"Agent-directed patch composition/negation is not implemented. Saved journal patches can be replayed by the materialize-patch utility; repeating an edit is not patch arithmetic."}],"tools":[{"name":"read_skill","purpose":"Load optional focused guidance for one suggested strategy."},{"name":"inspect_targets","purpose":"Read eight supported tensors; query matches name, alias, role or operation."},{"name":"inspect_probe_modules","purpose":"Read eight supported ordinary Linear modules and dimensions. Query filters module names. Probe activations on explicit non-test row IDs, source (prompt/reference/generation) and bounded token positions."},{"name":"probe_activations","purpose":"Measure selected module activations for up to 8 non-test contexts and optional contrasts. Read-only, produces bounded statistics and reusable direction handles, not full vectors. Set the structured probe field; null for other actions."},{"name":"inspect_tokens","purpose":"Inspect tokenizer-grounded IDs and norms; optional query tokenizes one text up to 256 characters; offset pages eight candidates."},{"name":"read_history","purpose":"Read eight measured candidate outcomes and preservation/control decisions."},{"name":"read_rollouts","purpose":"Empty query: eight non-test previews with row IDs, generation counts and finish reasons. Query a row ID, optionally /prompt, /target or /prediction (default), to page full text in 2048-character chunks; offset is then a character offset."},{"name":"read_behavior","purpose":"Read eight non-test row diagnostics and evidence. Query a signal name, split or row ID to filter. Counts describe observations, not semantic judgments or acceptance scores."},{"name":"propose","purpose":"Submit one bounded edit for controller validation, application, testing and keep/revert."},{"name":"stop","purpose":"End search without another edit, explaining why."}],"operation_contracts":{"scale":"MLP: W*(1+strength).","low_rank":"MLP: seeded low-rank direction, rank1–16, relative norm abs(strength).","noise":"MLP: seeded full-rank direction, relative norm abs(strength).","activation_rank_one":"MLP: forward reference keys with target-minus-predicted embedding directions; rank selects examples.","activation_preserve":"MLP: contrastive reference direction projected off measured preserve-key span; requires edit/preserve references and positive strength.","direction_projection":"One inspected eligible MLP weight and matching measured direction_id: strength0.000001–16, rank1, and1–256 inspected column indices. Actual stored relative norm after dtype rounding must satisfy the run max_relative_norm. Handles are evidence, not proof the direction causes the failure.","token_row_scale":"One table: multiply inspected non-special destination rows by1+strength; empty sources.","token_row_interpolate":"One table: positive bounded blend toward paired inspected source IDs; distinct source/destination; stored-row norm bound may reduce fraction.","token_row_residual":"Supported output table: positive measured target-minus-probability head-input residual on inspected edit_reference rows; rank selects examples; empty sources."},"edit_contract":"Only available_operations may be used, and inspected targets must support them. Other operation contracts describe capabilities that this model/dataset may not have. Except direction_projection, strength magnitude0.000001–0.1 and rank1–16. Direction_projection requires strength0.000001–16, rank1, one inspected target, a matching measured direction handle and1–256 selected in-range columns; actual stored relative norm after dtype rounding must satisfy the run max_relative_norm. MLP operations use empty token selectors. Row operations one canonical table and1–32 inspected non-special IDs. Tied aliases are one physical edit affecting both roles. Proposed writes are tested before retention. Use provided tools before considering unsupported custom gradient optimisers; arbitrary code/autograd/training is not available.","instructions":"Skills are optional suggestions, not a strategy whitelist. Inspect needed targets/tokens, then propose an available operation with your own concise strategy, plan and measured rationale. Read a skill only when its guidance helps. Tools are read-only and paginated (8 entries). Use query to filter target names/aliases/roles/operations, or inspect one token text (up to 256 characters) with the current tokenizer. An empty token query pages the current view; a new text replaces it. Use offset to page. Start with the measured behavior summary, then read_behavior and full-text rollout pages to inspect failures. Choose probes and model-level changes from that evidence, not a fixed task menu. Explain the public evidence and hypothesis concisely, without private chain-of-thought. Read history for previous outcomes. Do not request the entire manifest. Tool calls consume frontier budget; stop if no justified candidate remains. The selected skill and latest target/token pages remain in context, alongside bounded recent evidence and request receipts. Evidence previews may be truncated; fetch a specific page when needed. Combine behavior and rollout evidence rather than alternating identical reads. Identical same-state requests reuse results; two consecutive reused requests stop inspection as no progress. New justified queries and pages remain available."})
 }
 
 pub fn validate_action(action: &Value) -> Result<()> {
@@ -299,6 +300,31 @@ pub fn validate_action(action: &Value) -> Result<()> {
     Ok(())
 }
 
+// Payload retention is bounded independently of the number of editor calls.
+const RECEIPTS: usize = 12;
+const CACHE_ENTRIES: usize = 8;
+const CACHE_BYTES: usize = 256 * 1024;
+const EVIDENCE_BYTES: usize = 6000;
+
+fn evidence_preview(result: &Value) -> Value {
+    if result.to_string().len() <= EVIDENCE_BYTES {
+        return result.clone();
+    }
+    let mut preview = short(result, 256);
+    while preview.to_string().len() > EVIDENCE_BYTES {
+        if let Some(items) = preview.get_mut("items").and_then(Value::as_array_mut) {
+            if items.pop().is_some() {
+                continue;
+            }
+        }
+        return json!({"excerpt": result.to_string().chars().take(1024).collect::<String>(), "truncated": true});
+    }
+    if &preview != result {
+        preview["truncated"] = json!(true);
+    }
+    preview
+}
+
 pub struct Session {
     pub catalogue: Value,
     pub inspection: Value,
@@ -310,6 +336,11 @@ pub struct Session {
     pub selected: Value,
     pub last_result: Value,
     pub token_query: String,
+    evidence: BTreeMap<String, Value>,
+    visible_requests: BTreeMap<String, String>,
+    receipts: Vec<Value>,
+    cache: Vec<(String, Value)>,
+    consecutive_repeats: usize,
     working_targets: Value,
     working_tokens: Value,
     seen_targets: BTreeSet<String>,
@@ -334,15 +365,112 @@ impl Session {
             selected: Value::Null,
             last_result: Value::Null,
             token_query: String::new(),
+            evidence: BTreeMap::new(),
+            visible_requests: BTreeMap::new(),
+            receipts: vec![],
+            cache: vec![],
+            consecutive_repeats: 0,
             working_targets: json!([]),
             working_tokens: json!([]),
             seen_targets: BTreeSet::new(),
             seen_tokens: BTreeSet::new(),
         }
     }
+    // A Session belongs to one retained checkpoint/candidate turn. Summary prose
+    // is not part of tool identity. Token pages additionally depend on their view.
+    fn request_key(&self, request: &Value) -> String {
+        let action = request["action"].as_str().unwrap_or("");
+        let identity = json!({
+            "action": action,
+            "query": request["query"].as_str().unwrap_or(""),
+            "offset": request["offset"].as_u64().unwrap_or(0),
+            "skill_id": if action == "read_skill" { request["skill_id"].as_str().unwrap_or("") } else { "" },
+            "probe": if action == "probe_activations" { request["probe"].clone() } else { Value::Null },
+            "token_view": if action == "inspect_tokens" { &self.token_query } else { "" },
+        });
+        format!("{:x}", Sha256::digest(identity.to_string().as_bytes()))
+    }
+    /// Check before worker dispatch, so identical probes do not run twice.
+    /// Cheap view tools are re-applied to restore their selection/working page.
+    pub fn repeated_result(&mut self, request: &Value) -> Option<(Value, bool)> {
+        let key = self.request_key(request);
+        let result = self.cache.iter().find(|(k, _)| k == &key)?.1.clone();
+        let action = request["action"].as_str().unwrap_or("");
+        let visible = self.visible_requests.get(action) == Some(&key)
+            && (self
+                .evidence
+                .get(action)
+                .is_none_or(|e| e["result"].get("truncated").is_none())
+                || self.last_result == result);
+        if matches!(action, "read_skill" | "inspect_targets" | "inspect_tokens") {
+            return self
+                .execute(request)
+                .ok()
+                .map(|restored| (restored, visible));
+        }
+        Some((result, visible))
+    }
+    pub fn record_result(&mut self, request: &Value, result: Value, repeated: bool) {
+        let action = request["action"].as_str().unwrap_or("");
+        let key = self.request_key(request);
+        self.consecutive_repeats = if repeated {
+            self.consecutive_repeats + 1
+        } else {
+            0
+        };
+        // A rejected proposal isn't a read and must be revalidated against newly
+        // inspected targets/tokens/handles. Errors are not reusable evidence.
+        if result.get("error").is_none() && action != "propose" {
+            self.visible_requests.insert(action.into(), key.clone());
+            if !repeated {
+                self.cache.retain(|(old, _)| old != &key);
+                if result.to_string().len() <= CACHE_BYTES / CACHE_ENTRIES {
+                    self.cache.push((key.clone(), result.clone()));
+                    if self.cache.len() > CACHE_ENTRIES {
+                        self.cache.remove(0);
+                    }
+                }
+            }
+            if matches!(
+                action,
+                "read_behavior"
+                    | "read_rollouts"
+                    | "read_history"
+                    | "probe_activations"
+                    | "inspect_probe_modules"
+            ) {
+                self.evidence.insert(
+                    action.into(),
+                    json!({
+                        "request_id": key, "query": request["query"],
+                        "offset": request["offset"], "result": evidence_preview(&result),
+                    }),
+                );
+            }
+        }
+        self.receipts.push(json!({
+            "request_id": key, "action": action, "query": short(&request["query"], 256),
+            "offset": request["offset"], "summary": short(&request["summary"], 160),
+            "status": if result.get("error").is_some() { "rejected" } else if repeated { "reused" } else { "completed" },
+            "count": result["count"], "next_offset": result["next_offset"],
+        }));
+        if self.receipts.len() > RECEIPTS {
+            self.receipts.remove(0);
+        }
+        self.last_result = result;
+    }
+    pub fn repeated_without_progress(&self) -> bool {
+        self.consecutive_repeats >= 2
+    }
+
     /// Retain only compact measured handles when later read tools replace the
     /// current tool result. Sessions are recreated after each candidate turn.
     pub fn remember_probe_result(&mut self, result: &Value) {
+        // New measurements can evict worker-side handles. Only the latest
+        // measurement may be replayed; older requests must measure again.
+        self.cache
+            .retain(|(_, value)| value.get("probes").is_none());
+        self.visible_requests.remove("probe_activations");
         for probe in result["probes"].as_array().into_iter().flatten().take(4) {
             let Some(id) = probe["direction_id"]
                 .as_str()
@@ -387,6 +515,11 @@ impl Session {
         self.token_query = query;
         self.seen_tokens.clear();
         self.working_tokens = json!([]);
+        // Refresh may replace tokenizer/inspection metadata; never replay old
+        // cached working pages or probes after this explicit state transition.
+        self.cache.clear();
+        self.visible_requests.clear();
+        self.consecutive_repeats = 0;
     }
     pub fn context(&self, base: &Value) -> Value {
         let mut context = base.clone();
@@ -395,6 +528,12 @@ impl Session {
         context["measured_directions"] = json!(self.directions);
         context["selected_skill"] = self.selected.clone();
         context["tool_result"] = self.last_result.clone();
+        context["recent_evidence"] = json!(self.evidence);
+        context["recent_requests"] = json!(self.receipts);
+        context["inspection_progress"] = json!({
+            "consecutive_reused_requests": self.consecutive_repeats,
+            "policy": "Combine retained evidence before requesting more. Identical same-state requests reuse results and add no evidence. After a reused request, choose a new justified query/page/probe, propose, or stop. A second consecutive reused request stops inspection without changing weights or buying another editor call. This is a no-progress guard, not a candidate-turn limit."
+        });
         context["working_set"] =
             json!({"targets":self.working_targets,"tokens":self.working_tokens});
         context
@@ -615,6 +754,111 @@ mod tests {
             &[],
             &json!({"samples":[{"split":"test","prompt":"SEALED"},{"split":"edit","prompt":"visible"}]}),
         )
+    }
+    fn request(action: &str, query: &str, offset: usize) -> Value {
+        json!({"action":action,"query":query,"offset":offset,"skill_id":"","summary":"Inspect evidence","probe":null,"proposal":null})
+    }
+    fn run_read(s: &mut Session, request: &Value) -> bool {
+        let (result, repeated) = s
+            .repeated_result(request)
+            .unwrap_or_else(|| (s.execute(request).unwrap(), false));
+        s.record_result(request, result, repeated);
+        repeated
+    }
+    #[test]
+    fn alternating_reads_retain_evidence_then_stop_only_on_no_progress() {
+        let mut s = session();
+        let behavior = request("read_behavior", "", 0);
+        let rollouts = request("read_rollouts", "", 0);
+        assert!(!run_read(&mut s, &behavior));
+        assert!(!run_read(&mut s, &rollouts));
+        let c = s.context(&json!({}));
+        assert!(c["recent_evidence"]["read_behavior"]["result"]["items"].is_array());
+        assert!(c["recent_evidence"]["read_rollouts"]["result"]["items"].is_array());
+        assert!(!c.to_string().contains("SEALED"));
+        assert!(run_read(&mut s, &behavior));
+        assert!(!s.repeated_without_progress()); // one more decision after warning
+        let mut differently_worded = rollouts.clone();
+        differently_worded["summary"] = json!("Read again with a different explanation");
+        assert!(run_read(&mut s, &differently_worded));
+        assert!(s.repeated_without_progress()); // controller stops before next paid call
+    }
+    #[test]
+    fn pages_queries_eviction_and_refresh_are_progress() {
+        let mut s = session();
+        let first = request("read_rollouts", "", 0);
+        run_read(&mut s, &first);
+        run_read(&mut s, &request("read_rollouts", "", 8));
+        assert!(!run_read(&mut s, &first)); // old page no longer visible, restore it
+        for offset in 1..30 {
+            run_read(&mut s, &request("read_rollouts", "", offset));
+        }
+        assert!(s.repeated_result(&first).is_none()); // bounded cache eviction
+        assert!(!run_read(&mut s, &first)); // still fetchable
+        assert!(!run_read(&mut s, &request("read_behavior", "edit", 0)));
+        let token = request("inspect_tokens", "", 0);
+        run_read(&mut s, &token);
+        assert!(run_read(&mut s, &token));
+        s.refresh(
+            json!({"token_candidates":[{"id":7}]}),
+            json!({}),
+            "changed".into(),
+        );
+        assert!(s.repeated_result(&token).is_none());
+        assert!(!run_read(&mut s, &token));
+        assert_eq!(s.last_result["items"][0]["id"], 7);
+        assert!(s.seen_tokens.contains(&7));
+        assert!(!s.seen_tokens.contains(&3));
+        assert!(!s.repeated_without_progress());
+        assert!(session().repeated_result(&first).is_none());
+    }
+    #[test]
+    fn repeated_probe_is_reused_but_new_measurements_invalidate_handles_cache() {
+        let mut s = session();
+        let mut probe = request("probe_activations", "", 0);
+        probe["probe"] = json!({"modules":["layer"],"positions":[-1]});
+        let result = json!({"probes":[{"direction_id":"a","target":"layer.weight"}],"state_id":1});
+        s.remember_probe_result(&result);
+        s.record_result(&probe, result.clone(), false);
+        assert_eq!(s.repeated_result(&probe), Some((result, true)));
+        let mut new_probe = probe.clone();
+        new_probe["probe"]["positions"] = json!([0]);
+        assert!(s.repeated_result(&new_probe).is_none());
+        s.remember_probe_result(&json!({"probes":[{"direction_id":"b","target":"layer.weight"}]}));
+        assert!(s.repeated_result(&probe).is_none());
+    }
+    #[test]
+    fn evidence_and_receipts_are_bounded_over_long_sessions() {
+        let mut s = session();
+        for n in 0..200 {
+            let r = request("read_rollouts", "", n);
+            let result = json!({"tool":"read_rollouts","items":vec![json!({"prediction":"界".repeat(10000) }); 8]});
+            s.record_result(&r, result, false);
+        }
+        // Last result remains the caller's bounded page; historical retention
+        // has a separate strict bound even for deliberately oversized fixtures.
+        s.last_result = Value::Null;
+        let c = s.context(&json!({}));
+        assert!(c["recent_evidence"].to_string().len() < EVIDENCE_BYTES + 1024);
+        assert_eq!(c["recent_requests"].as_array().unwrap().len(), RECEIPTS);
+        assert!(s.cache.len() <= CACHE_ENTRIES);
+        assert!(
+            s.cache
+                .iter()
+                .map(|(_, v)| v.to_string().len())
+                .sum::<usize>()
+                <= CACHE_BYTES
+        );
+        assert!(c.to_string().len() < 30_000);
+    }
+    #[test]
+    fn truncated_previous_evidence_can_be_recovered_without_stall() {
+        let mut s = session();
+        let r = request("read_rollouts", "", 0);
+        let result = json!({"tool":"read_rollouts","text":"x".repeat(10000)});
+        s.record_result(&r, result.clone(), false);
+        run_read(&mut s, &request("read_behavior", "", 0));
+        assert_eq!(s.repeated_result(&r), Some((result, false)));
     }
     #[test]
     fn initial_context_is_discovery_not_manifest() {

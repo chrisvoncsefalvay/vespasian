@@ -1229,6 +1229,7 @@ async fn plan_with_tools(
             events.emit(event)?;
             return Ok(None);
         }
+        let mut repeated = false;
         if tool == "propose" {
             if let Err(error) = session.validate(&action["proposal"]) {
                 session.last_result =
@@ -1250,7 +1251,12 @@ async fn plan_with_tools(
                     strategies::catalogue(dataset_mode, &info["allowed_operations"], &updated);
                 session.refresh(updated, catalogue, query.into());
             }
-            session.last_result = if tool == "probe_activations" {
+            session.last_result = if let Some((result, visible_repeat)) =
+                session.repeated_result(&action)
+            {
+                repeated = visible_repeat;
+                result
+            } else if tool == "probe_activations" {
                 let mut request = action["probe"].clone();
                 request["command"] = json!("probe_activations");
                 match worker.request(request, events).await {
@@ -1274,15 +1280,21 @@ async fn plan_with_tools(
                 }
             };
         }
+        session.record_result(&action, session.last_result.clone(), repeated);
         let failed = session.last_result.get("error").is_some();
         let summary = if failed {
             format!("{tool}: request rejected; no weights changed")
+        } else if repeated {
+            format!("{tool}: reused same-state result; no new evidence")
         } else {
             format!("{tool}: read-only result available")
         };
-        let event = json!({"type":"agent_tool","turn":turn,"call_id":call_id,"tool":tool,"status":if failed{"failed"}else{"completed"},"summary":summary,"details":{"skill_id":action["skill_id"],"count":session.last_result["count"],"total":session.last_result["total"],"offset":session.last_result["offset"],"available":session.last_result["available"]}});
+        let event = json!({"type":"agent_tool","turn":turn,"call_id":call_id,"tool":tool,"status":if failed{"failed"}else{"completed"},"summary":summary,"details":{"reused":repeated,"skill_id":action["skill_id"],"count":session.last_result["count"],"total":session.last_result["total"],"offset":session.last_result["offset"],"available":session.last_result["available"]}});
         events.record("event", &event)?;
         events.emit(event)?;
+        if session.repeated_without_progress() {
+            bail!("Inspection made no progress: two consecutive same-state requests reused evidence after a repeat warning; no weights changed");
+        }
     }
 }
 
