@@ -600,10 +600,13 @@ class RuntimeTests(unittest.TestCase):
         run.report = {"budget": {"spent_usd": 0.2}}
         for index, status in enumerate(("completed", "uncertain", "rejected", "attempted")):
             run.observe_allocation({"allocation_id": str(index), "status": status,
-                                    "requested_max_duration_seconds": 60})
+                                    "requested_max_duration_seconds": 60,
+                                    "quota_multiplier": 2 if index == 0 else 1})
         snapshot = run.snapshot()
         self.assertEqual(snapshot["gpu_allocations"]["attempt_count"], 4)
-        self.assertEqual(snapshot["gpu_allocations"]["declared_max_seconds_exposure"], 180)
+        self.assertEqual(snapshot["gpu_allocations"]["declared_max_seconds_exposure"], 240)
+        self.assertEqual(snapshot["gpu_allocations"]["declared_max_quota_seconds_exposure"], 300)
+        self.assertIn("server-side scheduler-call", snapshot["gpu_allocations"]["billing_note"])
         self.assertEqual(snapshot["report"]["budget"]["spent_usd"], 0.2)
         snapshot["gpu_allocations"]["receipts"][0]["status"] = "changed"
         self.assertEqual(run.snapshot()["gpu_allocations"]["receipts"][0]["status"], "completed")

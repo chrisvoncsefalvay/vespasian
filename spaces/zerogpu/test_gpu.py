@@ -801,14 +801,15 @@ class AllocationReceiptTests(unittest.TestCase):
             first = run.snapshot()
             self.assertEqual(len(attempts), 1)
             self.assertEqual(first["gpu_allocations"]["attempt_count"], 1)
-            self.assertEqual(first["gpu_allocations"]["declared_max_seconds_exposure"], 0)
+            self.assertEqual(first["gpu_allocations"]["declared_max_seconds_exposure"], 60)
             self.assertTrue(first["ready_for_allocation"])
             list(run.advance(gpu.dispatch))
             list(run.advance(gpu.dispatch))
         final = run.snapshot()["gpu_allocations"]
         self.assertEqual(len(attempts), 2)
         self.assertEqual(final["attempt_count"], 2)
-        self.assertEqual(final["declared_max_seconds_exposure"], 60)
+        self.assertEqual(final["declared_max_seconds_exposure"], 120)
+        self.assertEqual(final["declared_max_quota_seconds_exposure"], 120)
         self.assertEqual([r["status"] for r in final["receipts"]], ["rejected", "completed"])
 
     def test_inflight_cancel_preserves_state_until_operation_releases(self):

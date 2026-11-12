@@ -178,7 +178,7 @@ opening a new client, since the run belongs to its originating Gradio session.
 `gpu_allocations` is separate from the frontier editor's dollar budget. Each
 attempt records an opaque allocation ID, an opaque request correlation ID,
 operation, attempt number, exact `estimate_duration` bound, configured GPU size
-(currently large, 1x quota), and client-observed wall time. The reservation is
+(currently large, 1x quota), and server-side scheduler-call elapsed wall time. The reservation is
 recorded before the scheduler is called, but only after an allocation boundary
 is resumed. CPU polls and unresumed or cancelled boundaries add no reservation.
 The final run ZIP includes `gpu-allocations.json`.
@@ -188,11 +188,17 @@ Receipt states are `attempted` (scheduler call outstanding), `completed`
 before execution), and `uncertain` (exception or generator closure). A completed
 stream can contain a failed operation: consult `operation_ok`. Retry attempts
 get separate allocation IDs and require another `/advance` request.
-`declared_max_seconds_exposure` conservatively sums every attempt except known
-rejections, including outstanding and uncertain attempts. Neither this bound nor
-`wall_seconds` is measured GPU usage, an actual charge, or an HF credit balance.
+`declared_max_seconds_exposure` conservatively sums raw requested seconds for
+every attempted allocation, including rejections, outstanding attempts and
+uncertain attempts. A rejection does not release this financial bound based on
+exception text alone. `declared_max_quota_seconds_exposure` sums each requested
+duration multiplied by its quota multiplier. Neither bound nor `wall_seconds`
+is measured GPU usage, an actual charge, or an HF credit balance.
 Receipts contain no request payloads, headers, credentials, or filesystem paths.
 
 `ready_for_allocation` reports a known paused boundary only. False does not
 promise that the next `/advance` is CPU-only: the controller may enqueue a new
-operation concurrently. Every `/advance` still performs at most one allocation.
+operation concurrently. Do not wait for this flag to become true before driving
+an active run with `/advance`; a newly queued request can require that first
+advance to reach its boundary. Every `/advance` still performs at most one
+allocation.

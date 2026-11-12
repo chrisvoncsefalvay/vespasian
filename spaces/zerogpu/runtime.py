@@ -213,9 +213,12 @@ class Run:
                 "attempt_count": len(receipts),
                 "declared_max_seconds_exposure": sum(
                     row["requested_max_duration_seconds"] for row in receipts
-                    if row["status"] != "rejected"
                 ),
-                "billing_note": "Declared scheduler bounds, not billed GPU time or Hugging Face credits. Wall seconds are client-observed elapsed time.",
+                "declared_max_quota_seconds_exposure": sum(
+                    row["requested_max_duration_seconds"] * row["quota_multiplier"]
+                    for row in receipts
+                ),
+                "billing_note": "Conservative declared bounds for all attempts, including rejections; raw seconds and quota-normalised seconds are not billed GPU time or Hugging Face credits. Wall seconds are server-side scheduler-call elapsed wall time.",
             }
             state["ready_for_allocation"] = bool(
                 self.at_allocation_boundary and not self.advance_lock.locked()
