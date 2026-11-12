@@ -84,6 +84,48 @@
   dialog.className = 'vs-guide'
   dialog.setAttribute('aria-labelledby', 'vs-guide-title')
   dialog.setAttribute('aria-describedby', 'vs-guide-description')
+  function observeVisibleViewport() {
+    if (window === window.top || !window.IntersectionObserver) return
+    // HF can make its iframe taller than the browser. IntersectionObserver
+    // reports clipping across that boundary without reading the parent page.
+    const probe = document.createElement('div')
+    probe.setAttribute('aria-hidden', 'true')
+    probe.style.cssText = 'position:fixed;inset:0;pointer-events:none;opacity:0;z-index:-1'
+    document.body.append(probe)
+    const intersections = new Map()
+    const viewportObserver = new IntersectionObserver(entries => {
+      entries.forEach(entry => { if (probe.contains(entry.target)) intersections.set(entry.target, entry.intersectionRect) })
+      const shown = [...intersections.values()].filter(rect => rect.width > 0 && rect.height > 0)
+      if (!shown.length) return
+      const top = Math.max(0, Math.ceil(Math.min(...shown.map(rect => rect.top))))
+      const bottom = Math.min(window.innerHeight, Math.floor(Math.max(...shown.map(rect => rect.bottom))))
+      const height = Math.max(0, bottom - top)
+      const style = document.documentElement.style
+      style.setProperty('--vs-visible-top', `${top}px`)
+      style.setProperty('--vs-visible-bottom', `${Math.max(0, window.innerHeight - bottom)}px`)
+      style.setProperty('--vs-visible-height', `${height}px`)
+      dialog.dataset.vsViewport = height < 320 ? 'short' : height < 500 ? 'compact' : 'full'
+      if (dialog.open && height < 320 && dialog.querySelector('.vs-guide-top').contains(document.activeElement)) {
+        dialog.querySelector('.vs-guide-skip').focus({preventScroll: true})
+      }
+    }, {threshold: Array.from({length: 129}, (_, index) => index / 128)})
+    function resizeProbe() {
+      viewportObserver.disconnect()
+      intersections.clear()
+      probe.replaceChildren()
+      // Strips keep reporting parent scroll when the total visible area stays
+      // constant, a case a single full-height observation cannot detect.
+      const stripHeight = Math.max(64, Math.ceil(window.innerHeight / 64))
+      for (let top = 0; top < window.innerHeight; top += stripHeight) {
+        const strip = document.createElement('div')
+        strip.style.cssText = `position:absolute;left:0;right:0;top:${top}px;height:${Math.min(stripHeight, window.innerHeight - top)}px`
+        probe.append(strip)
+        viewportObserver.observe(strip)
+      }
+    }
+    resizeProbe()
+    window.addEventListener('resize', resizeProbe)
+  }
   function syncMotionPreference() {
     dialog.dataset.vsMotion = motionPreference.matches ? 'off' : 'on'
     if (motionPreference.matches) {
@@ -418,6 +460,7 @@
     if (!container || !document.querySelector('#vs-setup')) { setTimeout(initialise, 100); return }
     // Gradio scopes responsive CSS to .contain; native dialogs still use the top layer.
     (container.querySelector('.contain') || container).append(dialog)
+    observeVisibleViewport()
     applyTheme()
     syncPlatformHeader()
     platformObserver.observe(document.body, {childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'style', 'class']})

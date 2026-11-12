@@ -18,6 +18,7 @@ Screenshots and computed styles are saved with a JSON receipt. Experiment,
 GPU advance and Hub publication requests are blocked and fail the check.
 Ordinary Gradio load callbacks remain enabled. Local fake Space metadata is
 supplied only when localhost identifies itself as test/vespasian.
+Each engine reuses one page across viewport sizes to limit network traffic.
 """
 import argparse
 import json
@@ -102,63 +103,77 @@ with sync_playwright() as p:
         try:
             browser = getattr(p, engine).launch(headless=True)
             result['browsers'][engine] = browser.version
-            for width, height in sizes:
-                context = browser.new_context(viewport={'width': width, 'height': height}, device_scale_factor=1, reduced_motion='reduce', color_scheme=args.theme, is_mobile=width<500, has_touch=width<500)
-                context.add_init_script('localStorage.setItem("vespasian.theme", ' + json.dumps(args.theme) + ')')
-                page = context.new_page()
-                page.set_default_timeout(10000)
-                page.on('pageerror', lambda e: result['errors'].append(str(e)))
-                configurations = {}
+            width, height = sizes[0]
+            context = browser.new_context(viewport={'width': width, 'height': height}, device_scale_factor=1, reduced_motion='reduce', color_scheme=args.theme, is_mobile=width<500, has_touch=width<500)
+            context.add_init_script('localStorage.setItem("vespasian.theme", ' + json.dumps(args.theme) + ')')
+            page = context.new_page()
+            page.set_default_timeout(10000)
+            page.on('pageerror', lambda e: result['errors'].append(str(e)))
+            configurations = {}
 
-                def configuration(origin):
-                    if origin not in configurations:
-                        response = context.request.get(origin + '/config')
-                        if not response.ok:
-                            raise RuntimeError(f'Cannot read {origin}/config: HTTP{response.status}')
-                        configurations[origin] = response.json()
-                    return configurations[origin]
+            def configuration(origin):
+                if origin not in configurations:
+                    response = context.request.get(origin + '/config')
+                    if not response.ok:
+                        raise RuntimeError(f'Cannot read {origin}/config: HTTP{response.status}')
+                    configurations[origin] = response.json()
+                return configurations[origin]
 
-                def guard(route):
-                    request = route.request
+            def guard(route):
+                request = route.request
+                try:
+                    body = request.post_data_json or {}
+                except Exception:
+                    body = {}
+                url = urlparse(request.url)
+                origin = f'{url.scheme}://{url.netloc}'
+                forbidden_functions = blocked_functions(configuration(origin))
+                if request.method == 'POST' and (body.get('fn_index') in forbidden_functions or re.search(r'/(call|run)/(run|advance|publish)', request.url)):
+                    result['forbidden'].append(request.url)
+                    route.abort()
+                else:
+                    route.continue_()
+            page.route(re.compile(r'/gradio_api/(queue/join|run/|call/)'), guard)
+            if urlparse(args.url).hostname in {'127.0.0.1', 'localhost'}:
+                origin = args.url.rstrip('/')
+                if configuration(origin).get('space_id') == 'test/vespasian':
+                    result['local_metadata_fixture'] = True
+                    page.route('https://huggingface.co/api/spaces/test/vespasian', lambda route: route.fulfill(json={'id':'test/vespasian','author':'test','sha':'fixture','cardData':{'title':'Vespasian'},'likes':0}))
+            page.goto(args.url, wait_until='domcontentloaded', timeout=90000)
+            frame = page
+            if args.embed:
+                page.wait_for_selector('iframe[src*="hf.space"]', timeout=90000)
+                iframe = page.locator('iframe[src*="hf.space"]').first
+                for attempt in range(3):
                     try:
-                        body = request.post_data_json or {}
+                        iframe.scroll_into_view_if_needed()
+                        break
                     except Exception:
-                        body = {}
-                    url = urlparse(request.url)
-                    origin = f'{url.scheme}://{url.netloc}'
-                    forbidden_functions = blocked_functions(configuration(origin))
-                    if request.method == 'POST' and (body.get('fn_index') in forbidden_functions or re.search(r'/(call|run)/(run|advance|publish)', request.url)):
-                        result['forbidden'].append(request.url)
-                        route.abort()
-                    else:
-                        route.continue_()
-                page.route(re.compile(r'/gradio_api/(queue/join|run/|call/)'), guard)
-                if urlparse(args.url).hostname in {'127.0.0.1', 'localhost'}:
-                    origin = args.url.rstrip('/')
-                    if configuration(origin).get('space_id') == 'test/vespasian':
-                        result['local_metadata_fixture'] = True
-                        page.route('https://huggingface.co/api/spaces/test/vespasian', lambda route: route.fulfill(json={'id':'test/vespasian','author':'test','sha':'fixture','cardData':{'title':'Vespasian'},'likes':0}))
-                page.goto(args.url, wait_until='domcontentloaded', timeout=90000)
-                frame = page
-                if args.embed:
-                    page.wait_for_selector('iframe[src*="hf.space"]', timeout=90000)
-                    iframe = page.locator('iframe[src*="hf.space"]').first
-                    for attempt in range(3):
-                        try:
-                            iframe.scroll_into_view_if_needed()
-                            break
-                        except Exception:
-                            if attempt == 2:
-                                raise
-                            page.wait_for_timeout(1000)
-                    frame = iframe.content_frame
-                expect(frame.locator('#vs-guide[open]')).to_be_visible(timeout=90000)
-                expect(frame.locator('html')).to_have_attribute('data-vs-theme', args.theme)
+                        if attempt == 2:
+                            raise
+                        page.wait_for_timeout(1000)
+                frame = iframe.content_frame
+            expect(frame.locator('#vs-guide[open]')).to_be_visible(timeout=90000)
+            expect(frame.locator('html')).to_have_attribute('data-vs-theme', args.theme)
+            for width, height in sizes:
+                page.set_viewport_size({'width': width, 'height': height})
+                if not frame.locator('#vs-guide').evaluate('(el)=>el.open'):
+                    frame.locator('[data-vs-help]').first.click()
+                page.evaluate('scrollTo(0, 0)')
+                page.wait_for_timeout(250)
                 for index, name in enumerate(['welcome', 'weight-editing', 'how-to-use', 'quick-starters']):
                     frame.locator(f'[data-guide-tab="{index}"]').click()
                     page.wait_for_timeout(250)
                     metrics = frame.locator('#vs-guide').evaluate('(el, fn) => (new Function("return (" + fn + ")()"))()', MEASURE)
                     case = {'engine':engine,'width':width,'height':height,'section':name,'metrics':metrics,'failures':checks(metrics)}
+                    if args.embed:
+                        host_dialog = frame.locator('#vs-guide').bounding_box()
+                        host_footer = frame.locator('.vs-guide-footer').bounding_box()
+                        case['host'] = {'iframe': iframe.bounding_box(), 'dialog': host_dialog, 'footer': host_footer, 'viewport': page.viewport_size}
+                        if host_dialog['y'] < -1 or host_dialog['y'] + host_dialog['height'] > height + 1:
+                            case['failures'].append('Dialog is clipped by the parent browser viewport')
+                        if host_footer['y'] < -1 or host_footer['y'] + host_footer['height'] > height + 1:
+                            case['failures'].append('Footer is clipped by the parent browser viewport')
                     screenshot = f'{engine}-{width}x{height}-{name}.png'
                     page.screenshot(path=str(out/screenshot), full_page=False)
                     case['screenshot'] = screenshot
@@ -193,7 +208,7 @@ with sync_playwright() as p:
                     toggle.click()
                     expect(frame.locator('html')).to_have_attribute('data-vs-theme', args.theme)
                     result['interactions'].append(f'{engine}/{width}x{height}: Theme toggle works in both directions with guide reopen')
-                context.close()
+            context.close()
         except Exception:
             result['errors'].append(engine + ': ' + traceback.format_exc())
         finally:

@@ -1,3 +1,12 @@
+/* The deployed Gradio reset loads after custom styles. Scope native dashboard
+   controls by their stable output ID so both palettes retain their colours. */
+#vs-dashboard-output .vs-dashboard select{
+  min-height:44px;background:var(--vs-panel);color:var(--vs-paper);
+  border:1px solid var(--vs-input-line);border-radius:0;padding:9px 13px;
+  font:14px/1.5 var(--vs-sans);appearance:auto;color-scheme:inherit;cursor:pointer;
+}
+#vs-dashboard-output .vs-dashboard select option{background:var(--vs-panel);color:var(--vs-paper)}
+
 /* Theme values live on both roots because Gradio declares its own variables. */
 html[data-vs-theme="light"],html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"]{
   --vs-bg:#f5f1e8;--vs-panel:#fcf9f2;--vs-paper:#272d29;--vs-muted:#615f56;
