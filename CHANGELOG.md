@@ -1,8 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.3.1
 
 - Retain bounded recent editor evidence and request receipts. Reuse identical same-state reads and stop inspection after a repeat warning followed by another request for already-visible evidence. New queries, pages and recovery of evicted or truncated evidence remain available; no candidate is forced.
+
+- Expose session-isolated Space status and cancellation APIs without advancing GPU work. Include allocation attempt receipts and conservative declared-duration bounds in status and completed run bundles; these are not billed time or Hugging Face credit measurements.
+- Raise the parity starter health-check allowance from 16 to 64 tokens on both terminal and Space. This is a new starter protocol; historical 16-token baseline results are unchanged and must not be compared as the same protocol.
+- Preserve the embedded Space OAuth login fix and user-supplied GSM8K source handling.
+- Regression tests cover the editor repeat guard and shared starter settings. These changes do not establish live editing efficacy or improved benchmark scores.
 
 ## 0.3.0
 
