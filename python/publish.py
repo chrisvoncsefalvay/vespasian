@@ -196,7 +196,7 @@ class Prepared:
 
 _CARD_START = "<!-- vespasian:model-card:start -->"
 _CARD_END = "<!-- vespasian:model-card:end -->"
-_PROJECT = "https://chrisvoncsefalvay.github.io/vespasian/"
+_PROJECT = "https://chrisvoncsefalvay.com/vespasian/"
 # V mark and colours from site/assets/favicon.svg.
 _BADGE = '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="36" viewBox="0 0 240 36" role="img" aria-label="Created with Vespasian"><rect width="240" height="36" rx="6" fill="#14181b"/><path d="M9 9 19 27 29 9M15 9l4 8 4-8" fill="none" stroke="#d5a278" stroke-width="2"/><text x="39" y="23" font-family="sans-serif" font-size="15" fill="#f5eee7">Created with Vespasian</text></svg>'
 

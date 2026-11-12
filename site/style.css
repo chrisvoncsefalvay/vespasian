@@ -211,6 +211,7 @@ p {
 }
 .hero-actions {
   display:flex;
+  flex-wrap:wrap;
   align-items:center;
   gap:30px;
   margin-top:32px
@@ -676,6 +677,89 @@ div.ap-term {
 .data-note>span {
   color:var(--copper);
   padding-right:10px
+}
+.benchmark-section {
+  padding:0 0 100px
+}
+.benchmark-grid {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:75px;
+  border-top:1px solid var(--line);
+  padding-top:32px
+}
+.benchmark-steps {
+  margin:0;
+  padding-left:24px;
+  color:var(--copper)
+}
+.benchmark-steps li {
+  padding-left:12px
+}
+.benchmark-steps li+li {
+  margin-top:24px
+}
+.benchmark-steps h3,.benchmark-settings h3,.questions-grid h3 {
+  color:var(--paper);
+  font-size:18px;
+  font-weight:500;
+  line-height:1.4;
+  margin-bottom:9px
+}
+.benchmark-steps p,.questions-grid p {
+  font-size:14px;
+  line-height:1.8
+}
+.benchmark-steps strong {
+  font-weight:500;
+  color:var(--paper)
+}
+.benchmark-settings {
+  min-width:0;
+  border-left:1px solid var(--line);
+  padding-left:34px
+}
+.benchmark-settings h3 {
+  margin-bottom:20px
+}
+.benchmark-settings dl {
+  margin:0 0 24px;
+  font-size:13px
+}
+.benchmark-settings dl>div {
+  display:grid;
+  grid-template-columns:1fr 1.4fr;
+  gap:16px;
+  padding:11px 0;
+  border-bottom:1px solid var(--line)
+}
+.benchmark-settings dt {
+  color:var(--muted)
+}
+.benchmark-settings dd {
+  margin:0;
+  color:var(--paper)
+}
+.questions-section {
+  padding:90px 0 24px
+}
+.questions-grid {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:32px 75px
+}
+.questions-grid article {
+  border-top:1px solid var(--line);
+  padding-top:24px
+}
+.benchmark-section p a,.questions-grid p a {
+  color:var(--copper-light);
+  text-decoration:underline;
+  text-underline-offset:3px;
+  text-decoration-color:#645747
+}
+.benchmark-section p a:hover,.questions-grid p a:hover {
+  text-decoration-color:currentColor
 }
 .install-section {
   background:#1c2124;
@@ -1202,6 +1286,33 @@ div.ap-term {
   .data-note {
     font-size:10px;
     line-height:1.9
+  }
+  .benchmark-section {
+    padding-bottom:60px
+  }
+  .benchmark-grid {
+    grid-template-columns:1fr;
+    gap:30px;
+    padding-top:24px
+  }
+  .benchmark-settings {
+    border-left:0;
+    border-top:1px solid var(--line);
+    padding:24px 0 0
+  }
+  .benchmark-settings dl>div {
+    grid-template-columns:minmax(0,1fr) minmax(0,1.4fr);
+    gap:12px
+  }
+  .benchmark-settings dd {
+    overflow-wrap:anywhere
+  }
+  .questions-section {
+    padding-top:60px
+  }
+  .questions-grid {
+    grid-template-columns:1fr;
+    gap:26px
   }
   .install-section {
     padding-block:60px

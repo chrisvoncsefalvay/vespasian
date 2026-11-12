@@ -3,13 +3,13 @@ name = "vespasian"
 version = "0.3.1"
 edition = "2021"
 rust-version = "1.91"
-description = "The Weight Space Editing Assistant"
+description = "Weight space editing for small language models with frontier-guided tensor edits and measured hill climbs"
 license = "Apache-2.0"
 repository = "https://github.com/chrisvoncsefalvay/vespasian"
-homepage = "https://chrisvoncsefalvay.github.io/vespasian/"
+homepage = "https://chrisvoncsefalvay.com/vespasian/"
 documentation = "https://github.com/chrisvoncsefalvay/vespasian#readme"
 readme = "README.md"
-keywords = ["llm", "model-editing", "weight-editing", "tui", "ai"]
+keywords = ["weight-space", "model-editing", "weight-editing", "llm", "tui"]
 categories = ["command-line-utilities", "science"]
 include = ["/src/**", "/python/*.py", "/python/fixtures/**", "/python/requirements.txt", "/Cargo.toml", "/Cargo.lock", "/README.md", "/LICENSE", "/CHANGELOG.md", "/CONTRIBUTING.md", "/examples/**", "/scripts/generate_starters.py"]
 

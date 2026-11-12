@@ -1,0 +1,22 @@
+# Vespasian
+
+> Vespasian is an open-source weight space editing tool for small language models. A frontier model proposes direct tensor changes, evaluates candidates against a dataset and retains the best checkpoint.
+
+Vespasian provides a Rust command-line interface and a Hugging Face ZeroGPU browser workbench. Supported target models include Qwen3.5-0.8B and Gemma 3 1B. The software is licensed under Apache 2.0.
+
+The weight hill climb uses edit examples for proposals, validation examples for candidate selection and held-out test examples for final evaluation. Health checks track copying, arithmetic, JSON formatting and MMLU subjects, with optional regression limits. Runs can save a full checkpoint, replayable weight patches and editor trajectories. A USD budget tracks frontier editor inference.
+
+## Start here
+
+- [Vespasian website](https://chrisvoncsefalvay.com/vespasian/): Overview, installation, recorded terminal sessions and the editing method.
+- [Browser workbench](https://huggingface.co/spaces/chrisvoncsefalvay/vespasian): Run weight-editing experiments on Hugging Face ZeroGPU.
+- [User guide](https://github.com/chrisvoncsefalvay/vespasian/blob/main/README.md): CLI commands, dataset mapping, metrics, editor setup and export options.
+- [GSM8K example](https://chrisvoncsefalvay.com/vespasian/#gsm8k): A preset with numeric answer scoring, separate validation and test data, and adjustable example limits.
+
+## Reference
+
+- [Source code](https://github.com/chrisvoncsefalvay/vespasian): Rust controller, Python model worker and browser workbench.
+- [Releases](https://github.com/chrisvoncsefalvay/vespasian/releases): Platform binaries and release notes.
+- [Rust package](https://crates.io/crates/vespasian): Install with cargo install vespasian --locked.
+- [Changelog](https://github.com/chrisvoncsefalvay/vespasian/blob/main/CHANGELOG.md): Version history.
+- [Licence](https://github.com/chrisvoncsefalvay/vespasian/blob/main/LICENSE): Apache 2.0 terms.

@@ -49,12 +49,12 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn('src="https://raw.githubusercontent.com/', text)
 
     def test_linked_readme_images_use_raw_media_and_preserve_the_link(self):
-        source = "[![Watch the hill climb](docs/media/will-climb.gif)](https://chrisvoncsefalvay.github.io/vespasian/#watch)"
+        source = "[![Watch the hill climb](docs/media/will-climb.gif)](https://chrisvoncsefalvay.com/vespasian/#in-action)"
         with patch.object(Path, "read_text", return_value=source):
             text = archive_readme("0.1.5").decode()
         self.assertEqual(
             text,
-            "[![Watch the hill climb](https://raw.githubusercontent.com/chrisvoncsefalvay/vespasian/v0.1.5/docs/media/will-climb.gif)](https://chrisvoncsefalvay.github.io/vespasian/#watch)",
+            "[![Watch the hill climb](https://raw.githubusercontent.com/chrisvoncsefalvay/vespasian/v0.1.5/docs/media/will-climb.gif)](https://chrisvoncsefalvay.com/vespasian/#in-action)",
         )
 
     def test_archive_includes_starter_data_provenance_and_generator(self):

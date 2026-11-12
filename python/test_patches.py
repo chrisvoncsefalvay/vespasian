@@ -307,7 +307,7 @@ class PatchTests(unittest.TestCase):
         card = (self.root / "remote" / "README.md").read_text()
         self.assertIn("not a standalone model", card)
         self.assertIn("Created with Vespasian", card)
-        self.assertIn("https://chrisvoncsefalvay.github.io/vespasian/", card)
+        self.assertIn("https://chrisvoncsefalvay.com/vespasian/", card)
         self.assertNotIn("pipeline_tag", card)
         self.assertNotIn("alpha", card)
         self.assertTrue((self.root / "remote" / "vespasian-badge.svg").is_file())

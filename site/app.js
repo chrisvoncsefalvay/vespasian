@@ -5,7 +5,7 @@
   const recordings = {
     'will-climb': {
       label: 'willclimb',
-      caption: 'Watch it cook.',
+      caption: 'Follow the objective, generated answers and tensors through a recorded edit.',
       alt: 'Vespasian terminal showing the objective graph, generated answers and model layers'
     },
     setup: {
@@ -101,7 +101,7 @@
     paired: {
       filename: 'examples/concise.jsonl',
       json: "{\"prompt\":\"What is the capital of France? Give only the answer.\",\"target\":\"Paris\",\"split\":\"edit\"}",
-      description: 'Choose exact match, token overlap or goal scoring. Score each generated answer against its reference.',
+      description: 'Compare generated answers with references using exact match, numeric accuracy, token overlap or goal scoring.',
       command: 'vespasian examples/concise.jsonl --goal "Answer precisely" --budget 2'
     },
     corpus: {

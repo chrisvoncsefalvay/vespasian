@@ -4,30 +4,118 @@
   <meta charset="utf-8"/>
   <meta content="width=device-width, initial-scale=1" name="viewport"/>
   <meta content="#14181b" name="theme-color"/>
-  <meta content="Vespasian edits small language models through a measured weight hill climb. Set a behaviour, connect your data and follow every candidate from your terminal." name="description"/>
+  <meta content="Vespasian is an open-source weight space editing tool for Qwen and Gemma. Run direct tensor edits, evaluate GSM8K and track model health in the CLI or browser." name="description"/>
   <meta content="website" property="og:type"/>
   <meta content="Vespasian" property="og:site_name"/>
-  <meta content="Vespasian: The Weight Space Editing Assistant" property="og:title"/>
-  <meta content="Weight Space Programming language models with a hill climb." property="og:description"/>
-  <meta content="https://chrisvoncsefalvay.github.io/vespasian/" property="og:url"/>
-  <meta content="https://chrisvoncsefalvay.github.io/vespasian/assets/social-card.png" property="og:image"/>
+  <meta content="Vespasian | Weight Space Editing for Language Models" property="og:title"/>
+  <meta content="Edit small language model weights with a frontier-model-guided hill climb. Inspect each change, measure its effect and save the best checkpoint." property="og:description"/>
+  <meta content="https://chrisvoncsefalvay.com/vespasian/" property="og:url"/>
+  <meta content="https://chrisvoncsefalvay.com/vespasian/assets/social-card.png" property="og:image"/>
   <meta content="1200" property="og:image:width"/>
   <meta content="630" property="og:image:height"/>
   <meta content="Vespasian. The Weight Space Editing Assistant. A copper hill-climb diagram on charcoal." property="og:image:alt"/>
   <meta content="summary_large_image" name="twitter:card"/>
-  <meta content="Vespasian: The Weight Space Editing Assistant" name="twitter:title"/>
-  <meta content="Weight Space Programming language models with a hill climb." name="twitter:description"/>
-  <meta content="https://chrisvoncsefalvay.github.io/vespasian/assets/social-card.png" name="twitter:image"/>
-  <link href="https://chrisvoncsefalvay.github.io/vespasian/" rel="canonical"/>
+  <meta content="Vespasian | Weight Space Editing for Language Models" name="twitter:title"/>
+  <meta content="Edit small language model weights with a frontier-model-guided hill climb. Inspect each change, measure its effect and save the best checkpoint." name="twitter:description"/>
+  <meta content="https://chrisvoncsefalvay.com/vespasian/assets/social-card.png" name="twitter:image"/>
+  <meta content="Vespasian. The Weight Space Editing Assistant. A copper hill-climb diagram on charcoal." name="twitter:image:alt"/>
+  <link href="https://chrisvoncsefalvay.com/vespasian/" rel="canonical"/>
+  <link href="sitemap.xml" rel="sitemap" type="application/xml"/>
+  <link href="llms.txt" rel="alternate" type="text/plain" title="Vespasian documentation index"/>
   <link href="assets/favicon.svg" rel="icon" type="image/svg+xml"/>
   <link href="fonts.css" rel="stylesheet"/>
   <link href="vendor/asciinema-player.css" rel="stylesheet"/>
   <link href="style.css" rel="stylesheet"/>
   <title>
-   Vespasian: The Weight Space Editing Assistant
+   Vespasian | Weight Space Editing for Language Models
   </title>
   <script type="application/ld+json">
-   {"@context":"https://schema.org","@type":"SoftwareApplication","name":"Vespasian","description":"A command-line assistant for measured weight-space editing of small language models.","url":"https://chrisvoncsefalvay.github.io/vespasian/","downloadUrl":"https://github.com/chrisvoncsefalvay/vespasian/releases/tag/v{{VERSION}}","applicationCategory":"DeveloperApplication","operatingSystem":"Linux, macOS, Windows","softwareVersion":"{{VERSION}}","license":"https://www.apache.org/licenses/LICENSE-2.0","codeRepository":"https://github.com/chrisvoncsefalvay/vespasian","author":{"@type":"Person","name":"Chris von Csefalvay"},"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "WebSite",
+      "@id": "https://chrisvoncsefalvay.com/vespasian/#website",
+      "url": "https://chrisvoncsefalvay.com/vespasian/",
+      "name": "Vespasian",
+      "description": "Open-source weight space editing for small language models.",
+      "inLanguage": "en",
+      "publisher": {
+        "@id": "https://chrisvoncsefalvay.com/vespasian/#author"
+      },
+      "about": {
+        "@id": "https://chrisvoncsefalvay.com/vespasian/#software"
+      }
+    },
+    {
+      "@type": "SoftwareApplication",
+      "@id": "https://chrisvoncsefalvay.com/vespasian/#software",
+      "name": "Vespasian",
+      "alternateName": "The Weight Space Editing Assistant",
+      "description": "An open-source weight space editing tool that uses a frontier language model to propose direct tensor changes, evaluate candidates and retain the best small-model checkpoint.",
+      "url": "https://chrisvoncsefalvay.com/vespasian/",
+      "downloadUrl": "https://github.com/chrisvoncsefalvay/vespasian/releases/tag/v{{VERSION}}",
+      "installUrl": "https://crates.io/crates/vespasian",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "Linux, macOS, Windows",
+      "softwareVersion": "{{VERSION}}",
+      "license": "https://www.apache.org/licenses/LICENSE-2.0",
+      "isAccessibleForFree": true,
+      "image": "https://chrisvoncsefalvay.com/vespasian/assets/social-card.png",
+      "screenshot": "https://chrisvoncsefalvay.com/vespasian/media/will-climb-poster.png",
+      "author": {
+        "@id": "https://chrisvoncsefalvay.com/vespasian/#author"
+      },
+      "subjectOf": {
+        "@id": "https://chrisvoncsefalvay.com/vespasian/#source"
+      },
+      "sameAs": [
+        "https://github.com/chrisvoncsefalvay/vespasian",
+        "https://crates.io/crates/vespasian",
+        "https://huggingface.co/spaces/chrisvoncsefalvay/vespasian"
+      ],
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD",
+        "description": "The open-source application is available under Apache 2.0."
+      },
+      "featureList": [
+        "Direct tensor editing with a measured weight hill climb",
+        "Qwen3.5-0.8B and Gemma 3 1B model support",
+        "Terminal interface and Hugging Face browser workbench",
+        "GSM8K final-answer scoring and held-out evaluation",
+        "Model health checks with optional regression limits",
+        "Checkpoint, weight patch and editor trajectory export"
+      ]
+    },
+    {
+      "@type": "SoftwareSourceCode",
+      "@id": "https://chrisvoncsefalvay.com/vespasian/#source",
+      "name": "Vespasian source code",
+      "url": "https://github.com/chrisvoncsefalvay/vespasian",
+      "codeRepository": "https://github.com/chrisvoncsefalvay/vespasian",
+      "programmingLanguage": [
+        "Rust",
+        "Python"
+      ],
+      "license": "https://www.apache.org/licenses/LICENSE-2.0",
+      "version": "{{VERSION}}",
+      "targetProduct": {
+        "@id": "https://chrisvoncsefalvay.com/vespasian/#software"
+      },
+      "author": {
+        "@id": "https://chrisvoncsefalvay.com/vespasian/#author"
+      }
+    },
+    {
+      "@type": "Person",
+      "@id": "https://chrisvoncsefalvay.com/vespasian/#author",
+      "name": "Chris von Csefalvay",
+      "url": "https://github.com/chrisvoncsefalvay"
+    }
+  ]
+}
   </script>
   <script defer="" src="vendor/asciinema-player.min.js">
   </script>
@@ -55,6 +143,9 @@
     <a href="#how-it-works">
      The method
     </a>
+    <a href="#gsm8k">
+     GSM8K
+    </a>
     <a href="https://github.com/chrisvoncsefalvay/vespasian#readme">
      Docs ↗
     </a>
@@ -70,7 +161,7 @@
    <section aria-labelledby="hero-title" class="hero wrap">
     <div class="hero-topline">
      <span class="eyebrow">
-      Apache 2.0 · Authentic frontier gibberish 
+      Open source · Apache 2.0
      </span>
      <a class="version" href="https://github.com/chrisvoncsefalvay/vespasian/releases/tag/v{{VERSION}}">
       <span aria-hidden="true" class="status-dot">
@@ -91,17 +182,17 @@
        </span>
       </h1>
       <p class="hero-intro">
-       Vespasian brings the ease of autoresearch to meet the power of Intra-Weight Injection aka Weight Space Programming.
+       Vespasian is an open-source weight space editing tool for small language models. A frontier model proposes direct tensor changes, evaluates them against your dataset and retains the best checkpoint. Run it in your terminal or on Hugging Face.
       </p>
       <div class="hero-actions">
-       <a class="button button-primary" href="#install">
-        Start editing
+       <a class="button button-primary" href="https://huggingface.co/spaces/chrisvoncsefalvay/vespasian">
+        Open in browser
         <span aria-hidden="true">
          ↗
         </span>
        </a>
-       <a class="text-link" href="#in-action">
-        See how it works
+       <a class="text-link" href="#install">
+        Install the CLI
         <span aria-hidden="true">
          ↓
         </span>
@@ -114,7 +205,7 @@
         The weight hill climb
        </title>
        <desc id="climb-description">
-        Just like autoresearch, but for the weight space: track what works and what we yeeted.
+        A hill-climb diagram showing a retained sequence of model weight edits and rejected candidate branches.
        </desc>
        <defs>
         <pattern height="26" id="grid" patternUnits="userSpaceOnUse" width="26">
@@ -190,19 +281,19 @@
       <b>
        Supported models
       </b>
-      Qwen 0.8B · Gemma 1B · more to come
+      Qwen3.5 0.8B · Gemma 3 1B
      </span>
      <span>
       <b>
        Frontier editors
       </b>
-      Codex · Claude (API and login) · API
+      Codex · OpenAI · Claude
      </span>
      <span>
       <b>
        Inference budget
       </b>
-      Whatever you're willing to spend
+      Set a frontier budget in USD
      </span>
     </div>
    </section>
@@ -210,7 +301,7 @@
     <div class="section-heading">
      <div>
       <span class="eyebrow">
-       Our best 1980s CLI glory
+       01 · Live weight editing
       </span>
       <h2 id="demo-title">
        A clear view of
@@ -264,7 +355,7 @@
      </div>
      <div class="demo-caption">
       <span id="recording-caption">
-       Watch it cook.
+       Follow the objective, generated answers and tensors through a recorded edit.
       </span>
       <a download="" href="media/will-climb.cast" id="recording-download">
        Download .cast ↓
@@ -305,16 +396,16 @@
        02 · The method
       </span>
       <h2 id="method-title">
-       The
+       The weight
        <em>
-        willclimb.
+        hill climb.
        </em>
       </h2>
       <p class="lead">
-       It's a hill climb... for weight space.
+       Weight space programming through direct tensor edits.
       </p>
       <p>
-       The editor reflects on generated answers, proposes a direct tensor alteration and reads the result. And you get to see it all.
+       A frontier language model inspects the target model and its answers, then proposes a bounded weight alteration. Direct tensor operations and forward evaluation drive the search. Validation scores select the next step.
       </p>
       <a class="text-link" href="https://github.com/chrisvoncsefalvay/vespasian#how-weight-search-works">
        Explore the search loop ↗
@@ -330,7 +421,7 @@
          Set a direction
         </h3>
         <p>
-         Define the behaviour, connect the examples and choose the metric – including what must be preserved.
+         Define the behaviour, connect edit and validation examples, then choose the metric and capabilities to preserve.
         </p>
        </div>
       </li>
@@ -340,10 +431,10 @@
        </span>
        <div>
         <h3>
-         Do weight surgery
+         Apply a weight edit
         </h3>
         <p>
-         The editor selects tensors, an operation, a magnitude and a seed. Vespasian applies this bounded change to the model.
+         The editor inspects tensors and activations, selects a supported operation and proposes its parameters. Vespasian applies the bounded change directly to the weights.
         </p>
        </div>
       </li>
@@ -356,7 +447,7 @@
          See the result
         </h3>
         <p>
-         Vespasian generates rollouts and compares objective scores. Then, it runs basic capability preservation checks alongside them.
+         Vespasian generates answers and measures the objective alongside copying, arithmetic, JSON or MMLU health checks. Optional regression limits reject edits that reduce these scores too far.
         </p>
        </div>
       </li>
@@ -369,7 +460,7 @@
          Keep what works
         </h3>
         <p>
-         Yeet what doesn't. At the end, export the patch that prevailed.
+         Improved validation scores retain a candidate. Rejected edits are restored. Export the best checkpoint or a replayable weight patch with its measurements and optional editor trajectory.
         </p>
        </div>
       </li>
@@ -456,7 +547,7 @@
       </div>
       <pre><code id="data-json">{"prompt":"What is the capital of France? Give only the answer.","target":"Paris","split":"edit"}</code></pre>
       <p id="data-description">
-       Choose exact match, token overlap or goal scoring. Score each generated answer against its reference.
+       Compare generated answers with references using exact match, numeric accuracy, token overlap or goal scoring.
       </p>
       <div class="data-command">
        <span aria-hidden="true">
@@ -475,11 +566,38 @@
      Hugging Face field previews · Nested records · Example limits · Private repositories
     </p>
    </section>
+   <section aria-labelledby="gsm8k-title" class="benchmark-section wrap" id="gsm8k">
+    <div class="section-heading">
+     <div>
+      <span class="eyebrow">04 · A real benchmark</span>
+      <h2 id="gsm8k-title">Evaluate weight edits<br/>on <em>GSM8K.</em></h2>
+     </div>
+     <p>Use maths problems from <a href="https://huggingface.co/datasets/openai/gsm8k">OpenAI’s GSM8K dataset</a> to search for better final-answer accuracy. Compare the original model and retained checkpoint on held-out test questions.</p>
+    </div>
+    <div class="benchmark-grid">
+     <ol class="benchmark-steps">
+      <li><h3>Load the maths preset.</h3><p>Open the browser workbench, then choose <strong>Improve GSM8K maths</strong> from the guide’s Examples tab.</p></li>
+      <li><h3>Inspect the data and controls.</h3><p>Preview the question and answer fields, adjust the example limits, then choose your model, editor and USD budget.</p></li>
+      <li><h3>Follow validation and test scores.</h3><p>Watch final-answer accuracy and health checks through the weight hill climb. Review generated solutions and the final held-out evaluation.</p></li>
+     </ol>
+     <div class="benchmark-settings">
+      <h3>GSM8K preset</h3>
+      <dl>
+       <div><dt>Dataset</dt><dd>openai/gsm8k · main</dd></div>
+       <div><dt>Editing/validation</dt><dd>26/6 problems from train</dd></div>
+       <div><dt>Held-out test</dt><dd>16 problems from test</dd></div>
+       <div><dt>Metric</dt><dd>Final numeric answer accuracy</dd></div>
+       <div><dt>Health checks</dt><dd>Copying and arithmetic</dd></div>
+      </dl>
+      <a class="text-link" href="https://huggingface.co/spaces/chrisvoncsefalvay/vespasian">Open the GSM8K workbench ↗</a>
+     </div>
+    </div>
+   </section>
    <section aria-labelledby="install-title" class="install-section" id="install">
     <div class="wrap install-grid">
      <div>
       <span class="eyebrow">
-       04 · Get Vespasian
+       05 · Get Vespasian
       </span>
       <h2 id="install-title">
        Install
@@ -488,7 +606,7 @@
        </em>
       </h2>
       <p>
-       Fastest install flow in the West.
+       Install the Rust CLI and its Python model runtime. Release packages are available for Linux, macOS and Windows.
       </p>
       <div class="install-links">
        <a href="https://github.com/chrisvoncsefalvay/vespasian/releases">
@@ -555,15 +673,50 @@ vespasian</code></pre>
      </div>
     </div>
    </section>
+   <section aria-labelledby="questions-title" class="questions-section wrap" id="questions">
+    <div class="section-heading">
+     <div>
+      <span class="eyebrow">06 · Working with Vespasian</span>
+      <h2 id="questions-title">Weight editing<br/><em>in practice.</em></h2>
+     </div>
+     <p>Choose the model, data and measurements that fit the behaviour you want to change.</p>
+    </div>
+    <div class="questions-grid">
+     <article>
+      <h3>What is weight space editing?</h3>
+      <p>Weight space editing changes a neural network’s parameters to alter its behaviour. Vespasian uses an LLM-guided hill climb: a frontier model inspects weights and outputs, proposes direct tensor surgery, then uses measured results to guide its next edit.</p>
+     </article>
+     <article>
+      <h3>Which models can I edit?</h3>
+      <p>Vespasian supports <a href="https://huggingface.co/Qwen/Qwen3.5-0.8B">Qwen3.5-0.8B</a> and <a href="https://huggingface.co/google/gemma-3-1b-it">Gemma 3 1B</a>. The terminal also accepts Hub model IDs and local checkpoints with compatibility checks. The hosted workbench offers models loaded by its operator.</p>
+     </article>
+     <article>
+      <h3>Can I edit style and tone?</h3>
+      <p>Yes. Use a text corpus for unconditional generation, or prompts scored against a style goal. Paired examples support reference-answer tasks such as maths and factual responses. <a href="https://github.com/chrisvoncsefalvay/vespasian#datasets">Dataset modes and field mapping ↗</a></p>
+     </article>
+     <article>
+      <h3>Can I use it in the browser?</h3>
+      <p>The <a href="https://huggingface.co/spaces/chrisvoncsefalvay/vespasian">Hugging Face Space</a> runs model evaluation on ZeroGPU. Sign in with Hugging Face to access private datasets and save results to the Hub. Public datasets are available without signing in.</p>
+     </article>
+     <article>
+      <h3>How do the editor and budget work?</h3>
+      <p>The terminal connects to Codex or Claude CLI sessions, or OpenAI/Anthropic APIs. The browser accepts an OpenAI or Anthropic API key. Set a USD budget for frontier inference and follow tracked spend. CLI login sessions report estimated cost between calls.</p>
+     </article>
+     <article>
+      <h3>What can I save after a run?</h3>
+      <p>Export a full model checkpoint or a replayable weight patch, together with evaluation scores and optional editor trajectories. Download the files or publish selected results to a public or private Hugging Face repository.</p>
+     </article>
+    </div>
+   </section>
    <section class="closing wrap">
     <div aria-hidden="true" class="closing-mark">
      V
     </div>
     <div>
      <h2>
-      Check it out
+      Build with
       <em>
-       on GitHub.
+       Vespasian.
       </em>
      </h2>
     </div>
@@ -591,6 +744,9 @@ vespasian</code></pre>
     </a>
     <a href="https://github.com/chrisvoncsefalvay/vespasian/releases/tag/v{{VERSION}}">
      v{{VERSION}}
+    </a>
+    <a href="sitemap.xml">
+     Sitemap
     </a>
     <a href="https://github.com/chrisvoncsefalvay/vespasian/issues">
      Issues ↗

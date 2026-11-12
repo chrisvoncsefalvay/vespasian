@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://chrisvoncsefalvay.github.io/vespasian/sitemap.xml
+Sitemap: https://chrisvoncsefalvay.com/vespasian/sitemap.xml

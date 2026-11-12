@@ -1,12 +1,12 @@
 # Vespasian: The Weight Space Editing Assistant
 
-[![Vespasian: The Weight Space Editing Assistant](docs/social-card.png)](https://chrisvoncsefalvay.github.io/vespasian/)
+[![Vespasian: The Weight Space Editing Assistant](docs/social-card.png)](https://chrisvoncsefalvay.com/vespasian/)
 
-[Website](https://chrisvoncsefalvay.github.io/vespasian/) · [Quick start](#start-a-run) · [Datasets](#datasets) · [Releases](https://github.com/chrisvoncsefalvay/vespasian/releases) · [Contributing](CONTRIBUTING.md)
+[Website](https://chrisvoncsefalvay.com/vespasian/) · [Browser workbench](https://huggingface.co/spaces/chrisvoncsefalvay/vespasian) · [Quick start](#start-a-run) · [GSM8K example](#start-with-gsm8k) · [Datasets](#datasets) · [Releases](https://github.com/chrisvoncsefalvay/vespasian/releases) · [Contributing](CONTRIBUTING.md)
 
-Give a small model a behaviour to learn. Vespasian asks a frontier model to propose direct weight changes, measures their effects, and retains the best checkpoint.
+Vespasian is an open-source weight space editing tool for small language models, including Qwen3.5-0.8B and Gemma 3 1B. A frontier model proposes direct changes to neural network tensors. Vespasian evaluates each candidate and retains the best checkpoint through a measured weight hill climb.
 
-Follow the weight hill climb in your terminal. Watch the objective, health scores, generated text and active model layers. Inspect the editor's explanations and the ancestry of each candidate. Set an inference budget in dollars and take the resulting checkpoint to Hugging Face.
+Run weight-space programming experiments in the Rust terminal interface or the [Hugging Face workbench](https://huggingface.co/spaces/chrisvoncsefalvay/vespasian). Track objective scores, model health, generated answers and the layers changed by each edit. Set a frontier inference budget in USD, then export the checkpoint and editor trajectory to Hugging Face.
 
 ```sh
 vespasian examples/greetings.jsonl --task text-generation \
@@ -17,14 +17,14 @@ vespasian examples/greetings.jsonl --task text-generation \
 
 ## Watch it work
 
-[![A four-turn greetings edit on Qwen3.5-0.8B](docs/media/will-climb.gif)](https://chrisvoncsefalvay.github.io/vespasian/#watch)
+[![A four-turn greetings edit on Qwen3.5-0.8B](docs/media/will-climb.gif)](https://chrisvoncsefalvay.com/vespasian/#in-action)
 
 **A four-turn greetings edit on Qwen3.5-0.8B.** Follow the retained path, inspect generated answers and trace the tensors changed by each proposal.
 
-[Play the terminal recording](https://chrisvoncsefalvay.github.io/vespasian/#watch) · [Download the asciinema cast](docs/media/will-climb.cast)
+[Play the terminal recording](https://chrisvoncsefalvay.com/vespasian/#in-action) · [Download the asciinema cast](docs/media/will-climb.cast)
 
 - **Describe the behaviour.** Use reference answers, a style corpus or prompts scored against your goal.
-- **Choose the editor.** Connect a logged-in Codex/Claude CLI or an OpenAI/Anthropic API key.
+- **Choose the editor.** Use an OpenAI/Anthropic API key in either interface, or a logged-in Codex/Claude CLI in the terminal.
 - **Control the search.** Set the frontier model, reasoning effort, USD budget, optional turn cap and behaviours to preserve.
 - **Inspect each alteration.** Read generated answers beside the climb, layer map and candidate genealogy.
 - **Track model health.** Add copying, arithmetic, JSON and MMLU subject checks with individual example counts.
@@ -93,7 +93,7 @@ On Windows, select the environment's `Scripts\python.exe`. Registration checks t
 
 Run `vespasian` without arguments for the guided terminal flow. Choose a target type, model and dataset, then set the objective, behaviours to preserve, metric, health checks, editor model and dollar budget. Choose checkpoint and trajectory destinations, then review the settings before starting.
 
-[![Guided setup with a live Hugging Face dataset preview](docs/media/setup.gif)](https://chrisvoncsefalvay.github.io/vespasian/#watch)
+[![Guided setup with a live Hugging Face dataset preview](docs/media/setup.gif)](https://chrisvoncsefalvay.com/vespasian/#in-action)
 
 [Download the guided setup cast](docs/media/setup.cast)
 
@@ -120,7 +120,7 @@ The editor retains bounded recent evidence and tool receipts so it can compare b
 
 ### Start with GSM8K
 
-The Space guide has four tabs: **Welcome**, **Method**, **Setup** and **Examples**. It opens with Hugging Face sign-in and a walkthrough of weight editing. Its **Improve GSM8K maths** starter connects [OpenAI’s GSM8K dataset](https://huggingface.co/datasets/openai/gsm8k), selects final-answer accuracy and opens Data for inspection. Your target model and editor credentials stay selected. The light/dark toggle follows your system preference until you choose a theme, then remembers your choice.
+Open the [browser workbench](https://huggingface.co/spaces/chrisvoncsefalvay/vespasian), select **Quick guide**, then **Examples** and **Improve GSM8K maths**. This weight editing preset connects [OpenAI’s GSM8K dataset](https://huggingface.co/datasets/openai/gsm8k), selects final-answer accuracy and opens Data for inspection. Your target model and editor credentials stay selected.
 
 The preset uses 32 problems from the official training split, divided into 26 edit examples and six validation examples. Sixteen problems from the official test split measure the final checkpoint. Change both example limits in Data. The imported files record the dataset revision and retain the worked reference solutions.
 

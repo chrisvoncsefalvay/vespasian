@@ -480,7 +480,7 @@ def _publish_snapshot(directory, repo, token, *, consent=False, create=False, ap
             lines = ["---", "tags:", "- vespasian", "- model-editing", "- patches"]
             if index["base"].get("model"):
                 lines.append("base_model: " + json.dumps(index["base"]["model"]))
-            lines += ["---", "", "[![Created with Vespasian](vespasian-badge.svg)](https://chrisvoncsefalvay.github.io/vespasian/)",
+            lines += ["---", "", "[![Created with Vespasian](vespasian-badge.svg)](https://chrisvoncsefalvay.com/vespasian/)",
                       "", "# Private Vespasian patch storage", "",
                       "This repository stores exact-value patches, not a standalone model checkpoint.",
                       "Restore the best patch onto its matching verified base model before use. Latest may be pending or rejected; best is the retained state.",

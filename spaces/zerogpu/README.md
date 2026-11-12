@@ -1,5 +1,5 @@
 ---
-title: Vespasian
+title: "Vespasian: Weight Space Editing"
 emoji: 🟠
 colorFrom: gray
 colorTo: yellow
@@ -9,7 +9,19 @@ python_version: 3.12.12
 app_file: app.py
 pinned: true
 license: apache-2.0
-short_description: The Weight Space Editing Assistant
+short_description: Weight space editing for small language models
+tags:
+  - weight-space-editing
+  - weight-space-programming
+  - model-editing
+  - llm
+  - text-generation
+  - gsm8k
+models:
+  - Qwen/Qwen3.5-0.8B
+datasets:
+  - openai/gsm8k
+thumbnail: https://chrisvoncsefalvay.com/vespasian/assets/social-card.png
 hf_oauth: true
 hf_oauth_scopes:
   - read-repos
@@ -21,9 +33,15 @@ hf_oauth_scopes:
 
 **The Weight Space Editing Assistant**
 
-Connect your Hugging Face account, choose a dataset and give a small model a new
-behaviour. Vespasian asks a frontier model to propose direct tensor edits, measures
-each candidate and keeps the changes that improve the objective.
+Vespasian is an open-source weight space editing tool for small language models.
+This browser workbench runs on Hugging Face ZeroGPU. A frontier model proposes
+direct tensor edits, and a measured weight hill climb retains the best checkpoint.
+Use it for weight-space programming experiments with your own data or the
+GSM8K maths preset.
+
+[Website](https://chrisvoncsefalvay.com/vespasian/)
+· [Documentation](https://github.com/chrisvoncsefalvay/vespasian#readme)
+· [Source code](https://github.com/chrisvoncsefalvay/vespasian)
 
 The workbench connects the objective curve, health checks, generated answers,
 edited layers and candidate ancestry. Select a turn to inspect its changes and
@@ -60,7 +78,9 @@ are separate. You do not need to disable cross-site tracking protection.
    Download the run or save its model and trajectory to public or private Hub
    repositories.
 
-The first-use modal has four sections: **Welcome** (Hugging Face login or
+## GSM8K weight editing example
+
+The first-use guide has four sections: **Welcome** (Hugging Face login or
 **Proceed without login**), **Method**, **Setup** and
 **Examples**. **Improve GSM8K maths** loads the official `openai/gsm8k`
 `main` configuration with 32 training examples and 16 held-out test examples.
@@ -149,7 +169,7 @@ signed-in Codex/Claude CLI editors require the terminal environment.
 ## Source
 
 [GitHub](https://github.com/chrisvoncsefalvay/vespasian)
-· [Command line](https://chrisvoncsefalvay.github.io/vespasian/)
+· [Website](https://chrisvoncsefalvay.com/vespasian/)
 · [Space branch](https://github.com/chrisvoncsefalvay/vespasian/tree/zerogpu-space/spaces/zerogpu)
 
 The `zerogpu-space` branch receives changes from `main` through the deployment

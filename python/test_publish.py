@@ -291,7 +291,7 @@ class PublishTests(unittest.TestCase):
     def test_card_has_local_branded_badge_and_verified_evidence(self):
         self.call()
         card = self.uploaded["README.md"].decode()
-        self.assertIn("[![Created with Vespasian](vespasian-badge.svg)](https://chrisvoncsefalvay.github.io/vespasian/)", card)
+        self.assertIn("[![Created with Vespasian](vespasian-badge.svg)](https://chrisvoncsefalvay.com/vespasian/)", card)
         self.assertIn("pipeline_tag: text-generation", card)
         self.assertIn('base_model: "google/gemma-3-1b-it"', card)
         self.assertIn(SHA, card)

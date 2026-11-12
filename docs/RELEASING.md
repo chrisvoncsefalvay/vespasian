@@ -9,7 +9,7 @@ Releases come from version tags in [chrisvoncsefalvay/vespasian](https://github.
 3. Create the `crates-io` environment for the publication workflow.
 4. For the public launch, set the repository visibility to Public so source, recordings and release downloads share the same public URLs.
 
-The Pages workflow builds `dist/site` with `python scripts/build_site.py` and deploys changes from `main`. Its address is [chrisvoncsefalvay.github.io/vespasian](https://chrisvoncsefalvay.github.io/vespasian/).
+The Pages workflow builds `dist/site` with `python scripts/build_site.py` and deploys changes from `main`. Its address is [chrisvoncsefalvay.com/vespasian](https://chrisvoncsefalvay.com/vespasian/).
 
 ## Prepare a version
 
