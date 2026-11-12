@@ -30,7 +30,33 @@ class StarterTests(unittest.TestCase):
             self.assertEqual(entry["sha256"],hashlib.sha256(path.read_bytes()).hexdigest())
             self.assertEqual(entry["counts"],dict(Counter(r["split"] for r in self.rows[entry["id"]])))
             self.assertEqual(entry["metric"],"exact_match")
-            self.assertEqual(entry["max_new_tokens"], {"maths":128,"parity":16,"geometry":64,"json":64}[entry["id"]])
+            self.assertEqual(entry["max_new_tokens"], {"maths":128,"parity":64,"geometry":64,"json":64}[entry["id"]])
+
+    def test_parity_protocol_and_cli_budget_match_manifest(self):
+        parity = next(item for item in self.manifest["starters"] if item["id"] == "parity")
+        self.assertIn("64-token protocol", parity["detail"])
+        self.assertIn("historical 16-token protocol", parity["detail"])
+        docs = (ROOT / "examples/STARTERS.md").read_text()
+        command = docs.split("vespasian examples/starter-parity.jsonl", 1)[1].split("```", 1)[0]
+        self.assertIn(f"--max-new-tokens {parity['max_new_tokens']}", command)
+        self.assertEqual(parity["sha256"], "6ff848b12ca37abe1bd8318e9fb331d468143cf1763c331291fb00e5dd888e2c")
+
+    def test_parity_budget_fits_pinned_copying_references(self):
+        # Static tokenizer-only measurements from Qwen/Qwen3.5-0.8B revision
+        # 2fc06364715b967f1860aea9cf38778875588b17; no inference/download needed.
+        import health
+        references = [
+            ("0000: DeHm4 AdFxXL pKzgMsvsd", 18),
+            ("0001: GaJgjp3 D1k6 DHV 33sRkW", 22),
+            ("0002: JR3ZRk hYBgJ9 KSNGbj KqgHx", 22),
+            ("0003: ZrxVhDDY 6vVSVVm G7p Z711", 24),
+        ]
+        rows = health._local("copying", 4, 42)
+        self.assertEqual([row["target"] for row in rows], [target for target, _ in references])
+        cap = next(item["max_new_tokens"] for item in self.manifest["starters"] if item["id"] == "parity")
+        for _, tokens in references:
+            self.assertGreater(tokens, 16)
+            self.assertLess(tokens, cap)  # Leave room for EOS as well.
 
     def test_unique_prompts_and_four_splits(self):
         for rows in self.rows.values():

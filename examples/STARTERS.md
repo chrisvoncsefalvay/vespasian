@@ -5,7 +5,7 @@ Four original synthetic exercises teach editing, not benchmark performance. No d
 | File | Edit | Validation | Test | Preserve | Token cap |
 |---|---:|---:|---:|---:|---:|
 | starter-maths.jsonl | 6 | 4 | 4 | 6 | 128 |
-| starter-parity.jsonl | 6 | 4 | 4 | 8 | 16 |
+| starter-parity.jsonl | 6 | 4 | 4 | 8 | 64 |
 | starter-geometry.jsonl | 6 | 4 | 4 | 8 | 64 |
 | starter-json.jsonl | 6 | 4 | 4 | 6 | 64 |
 
@@ -32,11 +32,15 @@ vespasian examples/starter-maths.jsonl --model Qwen3.5-0.8B \
 
 ### Rename odd and even
 
+This is the **64-token parity protocol**, shared with the Space preset through the starter manifest. The cap also applies to copying health checks. At seed 42, the four copying references require 18, 22, 22 and 24 tokens with Qwen/Qwen3.5-0.8B tokenizer revision `2fc06364715b967f1860aea9cf38778875588b17`, so the former 16-token cap could not complete them. A 64-token allowance removes that length bottleneck; it does not guarantee health-check success for every model or establish edit efficacy.
+
+Saved `runs/starter-paid-20261112/parity` results belong to the **historical 16-token protocol**, not a matched baseline for this protocol. Keep their recorded settings and hashes unchanged. Dataset rows, split assignments and dataset hashes are unchanged; only the generation allowance changes. Thinking remains off and the editor defaults remain low reasoning and a $10 budget.
+
 ```sh
 vespasian examples/starter-parity.jsonl --model Qwen3.5-0.8B \
   --task text-classification --target-type classification \
   --goal 'On parity classification requests, output exactly willow for odd integers and copper for even integers. Preserve correct classification and obey explicit requests for ordinary odd/even labels. Preserve copying and unrelated answers.' \
-  --metric exact_match --max-new-tokens 16 \
+  --metric exact_match --max-new-tokens 64 \
   --preserve-tolerance 0 --health-check copying:4 --save-trajectory \
   --budget 10 --reasoning-effort low --editor openai
 ```

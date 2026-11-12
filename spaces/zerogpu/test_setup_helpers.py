@@ -136,6 +136,9 @@ class SetupTests(unittest.TestCase):
         for item in manifest["starters"]:
             with self.subTest(starter=item["id"]):
                 config = setup.preset_config(item["id"])
+                self.assertEqual(config["max_new_tokens"], item["max_new_tokens"])
+                if item["id"] == "parity":
+                    self.assertEqual(config["max_new_tokens"], 64)
                 path = Path(config["dataset_file"])
                 self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), item["sha256"])
                 preview = hub.preview_upload(str(path), config)

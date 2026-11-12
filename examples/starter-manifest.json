@@ -35,13 +35,13 @@
       "id": "parity",
       "title": "Rename odd and even",
       "description": "Use willow for odd and copper for even without a mapping in the prompt.",
-      "detail": "Reduced original adaptation of output-code remapping, not IWIBench scoring or benchmark reproduction. Code words are intentionally shared across splits; integers are disjoint.",
+      "detail": "Reduced original adaptation of output-code remapping, not IWIBench scoring or benchmark reproduction. Code words are intentionally shared across splits; integers are disjoint. The 64-token protocol gives copying health checks room to finish; saved starter-paid-20261112/parity results use the historical 16-token protocol and are not a matched baseline.",
       "file": "starter-parity.jsonl",
       "goal": "On parity classification requests, output exactly willow for odd integers and copper for even integers. Preserve correct classification and obey explicit requests for ordinary odd/even labels. Preserve copying and unrelated answers.",
       "target_type": "classification",
       "hf_task": "text-classification",
       "metric": "exact_match",
-      "max_new_tokens": 16,
+      "max_new_tokens": 64,
       "counts": {
         "edit": 6,
         "validation": 4,
@@ -53,7 +53,7 @@
         "https://github.com/HCLTech-robotics/iwibench"
       ],
       "limitations": [
-        "Reduced original adaptation of output-code remapping, not IWIBench scoring or benchmark reproduction. Code words are intentionally shared across splits; integers are disjoint.",
+        "Reduced original adaptation of output-code remapping, not IWIBench scoring or benchmark reproduction. Code words are intentionally shared across splits; integers are disjoint. The 64-token protocol gives copying health checks room to finish; saved starter-paid-20261112/parity results use the historical 16-token protocol and are not a matched baseline.",
         "No baseline admission or edit efficacy has been established for this dataset. Small preservation sets cannot establish general capability retention."
       ],
       "generator": "scripts/generate_starters.py",
