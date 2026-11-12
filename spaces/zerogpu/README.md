@@ -55,17 +55,22 @@ compare its answers with the baseline.
    repositories.
 
 The first-use modal has four sections: **Welcome** (Hugging Face login or
-**Proceed without login**), **Weight-space editing**, **How to use** and
-**Quick starters**. Four bundled starters cover short maths answers, odd/even
-codes, a geometric alias and canonical JSON extraction. Selecting one fills
-real settings and data and opens Data for inspection; it never starts a run.
-The selected model and editor credentials are preserved. Backup remains off
-until you explicitly authorize a named private repository.
+**Proceed without login**), **Method**, **Setup** and
+**Examples**. **Improve GSM8K maths** loads the official `openai/gsm8k`
+`main` configuration with 32 training examples and 16 held-out test examples.
+The training examples split into 26 edit examples and six validation examples.
+Both limits are editable in Data. Final answer accuracy compares the final
+numeric result while retaining full worked references. Copying and arithmetic
+health checks track preservation alongside the objective.
 
-These original synthetic exercises are adaptations, not benchmark reproductions
-or proven improvements. Starter settings and scoring caveats are in the bundled `examples/STARTERS.md`.
-Dismiss the modal with Close guide, the close button or Escape. Your browser remembers
-the dismissal, and **Quick guide** reopens it at any time.
+Selecting the starter opens Data for inspection and preserves your selected
+model and editor credentials. Inspect both previews, then review the editor and
+USD budget before choosing **Start experiment**. The preset uses a 512-token
+answer limit and a 2,048-token context. Dataset imports record the Hub revision.
+
+Dismiss the guide with Close, the × button or Escape. Your browser remembers
+the dismissal, and **Quick guide** reopens it at any time. The light/dark toggle
+follows your system preference until you choose a theme, then remembers your choice.
 
 HF access comes from your connected account. The optional token override supports
 other Hub credentials. Editor keys stay within the session's controller process.
@@ -127,8 +132,8 @@ frontier responses and GPU arithmetic can vary between runs and hardware.
 
 This public deployment has explicit resource limits: supported target models,
 $0.01–$100 frontier spend, 128 examples per dataset, four preservation checks
-with at most 16 examples each, 128 generated tokens per answer, and 1,024 sequence
-tokens. Seed 42, an editor output limit of 2,048 tokens and preservation
+with at most 16 examples each, 512 generated tokens per answer, and 2,048 sequence
+tokens. The initial form uses 128 generated tokens and a 1,024-token context. Seed 42, an editor output limit of 2,048 tokens and preservation
 tolerance 0 match the terminal defaults and appear in the review. These are hosting limits, not a different strategy or hidden turn cap.
 ZeroGPU availability and account quota can delay or stop allocations. A browser
 heartbeat is required; five minutes without one cancels the run. Completed

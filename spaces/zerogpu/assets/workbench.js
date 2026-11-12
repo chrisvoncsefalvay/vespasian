@@ -2,16 +2,45 @@
   if (window.__vespasianWorkbench) return
   window.__vespasianWorkbench = true
   const guideKey = 'vespasian.guide.v2'
+  const themeKey = 'vespasian.theme'
+  const systemTheme = window.matchMedia('(prefers-color-scheme: dark)')
+  let chosenTheme = null
+  try { chosenTheme = localStorage.getItem(themeKey) } catch {}
+  if (!['light', 'dark'].includes(chosenTheme)) chosenTheme = null
+  function applyTheme() {
+    const theme = chosenTheme || (systemTheme.matches ? 'dark' : 'light')
+    document.documentElement.dataset.vsTheme = theme
+    document.querySelectorAll('.gradio-container').forEach(el => { el.dataset.vsTheme = theme })
+    document.querySelectorAll('[data-vs-theme-toggle]').forEach(button => {
+      const label = theme === 'dark' ? 'Light mode' : 'Dark mode'
+      button.textContent = label
+      button.setAttribute('aria-label', `Switch to ${label.toLowerCase()}`)
+    })
+  }
+  systemTheme.addEventListener('change', () => { if (!chosenTheme) applyTheme() })
+  window.addEventListener('storage', event => {
+    if (event.key === themeKey) {
+      chosenTheme = ['light', 'dark'].includes(event.newValue) ? event.newValue : null
+      applyTheme()
+    }
+  })
+  document.addEventListener('click', event => {
+    if (!event.target.closest('[data-vs-theme-toggle]')) return
+    chosenTheme = document.documentElement.dataset.vsTheme === 'dark' ? 'light' : 'dark'
+    try { localStorage.setItem(themeKey, chosenTheme) } catch {}
+    applyTheme()
+  })
+  applyTheme()
   let dismissed = false, guideStep = 0, returnFocus = null
   let lastTab = null, lastRun = null, restoring = false, focusedControl = null, keyboardTabNavigation = false
   let selection = {turn: null, split: 'all', outcome: 'all', page: 0, follow: true}
   const expanded = new Map(), scrollPositions = new Map()
   const steps = [
-    ['Choose the small model to edit', 'Select the target model first, then define its desired behaviour and connect examples. The frontier editor is selected separately in Runtime.', ['Target model', 'Desired behaviour', 'Examples'], 'Target model availability depends on this Space and your Hugging Face access.'],
-    ['Define the behaviour you want to change', 'Describe a successful result, choose how to measure it and select any capabilities you want to preserve. Vespasian uses these decisions to compare proposed weight changes.', ['Your objective', 'Success metric', 'Preservation checks'], 'You can edit every setting before the experiment starts.'],
-    ['Connect examples that support the objective', 'Use paired questions and answers, reference writing for style, or prompts with a scoring rubric. Connect a Hugging Face dataset or upload a file, then inspect the mapped examples and choose how many to use.', ['Choose data', 'Inspect examples', 'Set the limit'], 'Signing in gives you access to your private datasets and Hub destinations.'],
-    ['Choose an editor and a spending limit', 'The editor model proposes changes to the small model’s tensors. Your USD budget covers the editor’s API calls and starts at $10. Reasoning defaults to low; a turn cap is optional. Hugging Face supplies the GPU time used to evaluate those changes.', ['Editor model', 'USD budget', 'Review and start'], 'The final review brings your data, scoring rules and budget together.'],
-    ['Follow each edit back to its evidence', 'Select a turn to inspect its score, changed layers and acceptance decision. Compare the original and edited answers, follow the retained checkpoint, then download the result or save it to your Hub account.', ['Select a turn', 'Compare outputs', 'Save the result'], 'Reopen this guide at any time from Help.']
+    ['Choose a model', 'Select the small model whose weights you want to edit.'],
+    ['Set the objective', 'Describe the change and choose its metric and health checks.'],
+    ['Connect data', 'Load a Hugging Face dataset or file, map its fields and set example limits.'],
+    ['Set the budget', 'Choose the frontier editor and its USD inference budget.'],
+    ['Review and run', 'Check the settings, start the run and compare scores and answers.']
   ]
   const visible = el => Boolean(el && el.getClientRects().length && !el.closest('[aria-hidden="true"]'))
   const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)')
@@ -64,19 +93,20 @@
   }
   syncMotionPreference()
   motionPreference.addEventListener('change', syncMotionPreference)
-  const guideTabs = ['Welcome', 'Weight-space editing', 'How to use', 'Quick starters']
-  dialog.innerHTML = `<div class="vs-guide-top"><span class="vs-kicker">GETTING STARTED</span><button type="button" class="vs-guide-close" data-guide-close aria-label="Close guide">×</button></div><div class="vs-guide-tabs" role="tablist" aria-label="Getting started sections">${guideTabs.map((label, index) => `<button type="button" role="tab" id="vs-guide-tab-${index}" aria-controls="vs-guide-panel" data-guide-tab="${index}">${label}</button>`).join('')}</div><div class="vs-guide-body" id="vs-guide-panel" role="tabpanel"><div class="vs-guide-index"></div><h2 id="vs-guide-title" tabindex="-1"></h2><p id="vs-guide-description"></p><div class="vs-guide-content"></div><p class="vs-guide-detail"></p><p class="vs-guide-feedback" role="status"></p></div><div class="vs-guide-footer"><button type="button" class="vs-guide-skip" data-guide-close>Close guide</button><div class="vs-guide-navigation"><button type="button" data-guide-back>Back</button><button type="button" class="vs-guide-next" data-guide-next>Next</button></div></div>`
+  const guideTabs = ['Welcome', 'Method', 'Setup', 'Examples']
+  dialog.innerHTML = `<div class="vs-guide-top"><span class="vs-kicker">GETTING STARTED</span><div class="vs-guide-tools"><button type="button" data-vs-theme-toggle aria-label="Switch to light mode">Light mode</button><button type="button" class="vs-guide-close" data-guide-close aria-label="Close guide">×</button></div></div><div class="vs-guide-tabs" role="tablist" aria-label="Getting started sections">${guideTabs.map((label, index) => `<button type="button" role="tab" id="vs-guide-tab-${index}" aria-controls="vs-guide-panel" data-guide-tab="${index}">${label}</button>`).join('')}</div><div class="vs-guide-body" id="vs-guide-panel" role="tabpanel"><div class="vs-guide-index"></div><h2 id="vs-guide-title" tabindex="-1"></h2><p id="vs-guide-description"></p><div class="vs-guide-content"></div><p class="vs-guide-detail"></p><p class="vs-guide-feedback" role="status"></p></div><div class="vs-guide-footer"><button type="button" class="vs-guide-skip" data-guide-close aria-label="Close guide">Close</button><div class="vs-guide-navigation"><button type="button" data-guide-back>Back</button><button type="button" class="vs-guide-next" data-guide-next>Next</button></div></div>`
   const sections = [
-    ['Welcome to Vespasian', 'Change a small language model’s behaviour, inspect the evidence for each edit, and keep the result.', 'Sign in to use your Hugging Face account for private datasets and Hub destinations. You can explore the workbench without signing in.'],
-    ['What is weight-space editing?', 'A frontier model acts as an editor: it proposes direct changes to a smaller model’s weights. Vespasian evaluates those changes against your examples and retains the candidates that meet the acceptance criteria.', 'This is an experiment, not a guarantee of improvement. Validation and preservation checks help reveal trade-offs; held-out test examples measure the final result.'],
-    ['From objective to evidence', 'Configure the experiment, review its limits, then follow every proposed edit back to its measurements.', 'The editor API uses your own key and spending limit. Hugging Face manages GPU quota separately. Nothing runs until you review the settings and choose Start experiment.'],
-    ['Start with a small experiment', 'Choose a task to load its objective, dataset and evaluation settings. Keep your selected model and editor, inspect the examples, and review the runtime before you start.', 'These are real weight-editing experiments on original synthetic tasks, not benchmark reproductions. Start experiment uses your editor API and budget; loading a task does not spend. Scores include answer format.']
+    ['Welcome to Vespasian', 'Edit a small model’s weights, measure the change and save the best checkpoint.', 'Sign in to open private datasets and save results to Hugging Face.'],
+    ['How editing works', 'The editor inspects the model, proposes a weight change and tests it against your examples.', 'Validation scores decide which edits to keep. Health checks track preserved capabilities. Test data measures the final result.'],
+    ['Set up an experiment', 'Choose a model, data, metric and editor budget.', 'Save the retained checkpoint and trajectory locally or to Hugging Face.'],
+    ['Choose a benchmark', 'Load a preset, inspect its examples and set your budget.', 'Compare the original and edited model on held-out test questions.']
   ]
   function nativeLogin() {
     const root = document.querySelector('#vs-login')
     return root?.matches('button,a') ? root : root?.querySelector('button,a')
   }
   function renderGuide(focus = false) {
+    dialog.querySelector('.vs-guide-body').scrollTop = 0
     const [title, text, detail] = sections[guideStep]
     dialog.querySelector('.vs-guide-index').textContent = `${guideStep + 1} of ${sections.length}`
     dialog.querySelector('#vs-guide-title').textContent = title
@@ -141,6 +171,7 @@
     guideStep = step
     renderGuide()
     dialog.showModal()
+    applyTheme()
     dialog.querySelector('#vs-guide-title').focus({preventScroll: true})
   }
   function closeGuide() {
@@ -387,6 +418,7 @@
     if (!container || !document.querySelector('#vs-setup')) { setTimeout(initialise, 100); return }
     // Gradio scopes responsive CSS to .contain; native dialogs still use the top layer.
     (container.querySelector('.contain') || container).append(dialog)
+    applyTheme()
     syncPlatformHeader()
     platformObserver.observe(document.body, {childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'style', 'class']})
     window.addEventListener('resize', syncPlatformHeader)

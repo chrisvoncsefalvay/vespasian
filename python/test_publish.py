@@ -140,6 +140,16 @@ class PublishTests(unittest.TestCase):
         self.assertEqual(results["final_metrics"], metrics)
         self.assertNotIn("loss", results["final_metrics"]["validation"])
 
+    def test_numeric_accuracy_survives_result_publication(self):
+        self.report["metric"] = "numeric_match"
+        for name in ("baseline_metrics", "best_metrics", "final_metrics"):
+            self.report[name] = {"validation": {"count": 4, "numeric_match": .75, "loss": .5}}
+        (self.run / "report.json").write_text(json.dumps(self.report))
+        self.call()
+        results = json.loads(self.uploaded["vespasian-results.json"])
+        self.assertEqual(results["metric"], "numeric_match")
+        self.assertEqual(results["final_metrics"]["validation"]["numeric_match"], .75)
+
     def test_new_public_repo_uses_explicit_visibility(self):
         info = SimpleNamespace(private=False, sha=SHA)
         self.api.model_info.side_effect = [HubError(404), info, info]

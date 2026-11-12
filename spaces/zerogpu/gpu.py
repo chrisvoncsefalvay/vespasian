@@ -353,6 +353,18 @@ def _validate_bounds(request, metadata=None):
                 raise ValueError("Invalid evaluation batch size")
 
 
+def _generation_rate():
+    rate = float(os.environ.get("VESPASIAN_SPACE_SECONDS_PER_TOKEN", "0.05"))
+    if not math.isfinite(rate) or rate <= 0:
+        raise ValueError("VESPASIAN_SPACE_SECONDS_PER_TOKEN must be finite and positive")
+    return rate
+
+
+def _evaluation_batch_size(request):
+    per_example = 1.5 + min(request.get("max_new_tokens", 64), MAX_NEW_TOKENS) * _generation_rate()
+    return max(1, min(MAX_EXAMPLES, math.floor((120 - 15) / per_example)))
+
+
 def estimate_duration(state_dir: str, request: dict):
     """Conservative scheduling estimate; deployment receipts calibrate its rates.
 
@@ -389,7 +401,7 @@ def estimate_duration(state_dir: str, request: dict):
         return 20
     count = request.get("_space_batch", {}).get("count", len(_selected_rows(request, metadata["engine"])))
     tokens = count * min(request.get("max_new_tokens", 64), MAX_NEW_TOKENS)
-    rate = float(os.environ.get("VESPASIAN_SPACE_SECONDS_PER_TOKEN", "0.05"))
+    rate = _generation_rate()
     return min(120, max(20, math.ceil(15 + count * 1.5 + tokens * rate)))
 
 
@@ -624,7 +636,7 @@ def _aggregate(parts):
         if "check" in sample:
             metric["score"] += int(sample["passed"])
         else:
-            for key in ("loss", "exact_match", "token_f1"):
+            for key in ("loss", "exact_match", "token_f1", "numeric_match"):
                 if key in sample:
                     metric[key] += float(sample[key])
     for metric in metrics.values():
@@ -652,7 +664,8 @@ def _batched_dispatch(state_dir, request, *, boundaries=False):
         return
     # Keep a retryable receipt outside the GPU boundary after each allocation.
     # Version binding prevents an old evaluation from observing newer edits.
-    identity = {"request": request, "model_version": metadata["model_version"]}
+    batch_size = _evaluation_batch_size(request)
+    identity = {"request": request, "model_version": metadata["model_version"], "batch_size": batch_size}
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True, allow_nan=False).encode()).hexdigest()
     journals = directory / "evaluations"
     journals.mkdir(exist_ok=True)
@@ -660,14 +673,14 @@ def _batched_dispatch(state_dir, request, *, boundaries=False):
     with _state_lock(journals):
         journal = json.loads(path.read_text()) if path.exists() else {**identity, "batches": []}
         parts = []
-        for index, offset in enumerate(range(0, total, MAX_EXAMPLES)):
+        for index, offset in enumerate(range(0, total, batch_size)):
             if index < len(journal["batches"]):
                 completed = journal["batches"][index]
                 for event in completed["events"]:
                     yield event
                 parts.append(completed["data"])
                 continue
-            batch_request = {**request, "id": f"{request.get('id')}:batch:{offset}", "_space_batch": {"offset": offset, "count": min(MAX_EXAMPLES, total - offset), "total": total, "model_version": metadata["model_version"]}}
+            batch_request = {**request, "id": f"{request.get('id')}:batch:{offset}", "_space_batch": {"offset": offset, "count": min(batch_size, total - offset), "total": total, "model_version": metadata["model_version"]}}
             events, result = [], None
             for event in _scheduled_dispatch(state_dir, batch_request, boundaries=boundaries):
                 if event.get("type") == "gpu_allocation":

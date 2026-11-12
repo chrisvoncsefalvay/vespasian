@@ -392,6 +392,20 @@ class WorkerTests(unittest.TestCase):
             self.assertTrue(0 <= metric["token_f1"] <= 1)
             self.assertEqual(metric["count"], 1)
 
+    def test_numeric_accuracy_flows_from_completed_answers_to_split_metrics(self):
+        instance = engine()
+        instance.dataset = [{"prompt": "first", "target": "A worked solution. #### 42", "split": "validation"},
+                            {"prompt": "second", "target": "Another solution. #### 8", "split": "validation"}]
+        outputs = iter(["The answer is 42.", "The answer is 9."])
+        instance.tokenizer.decode = lambda *args, **kwargs: next(outputs)
+        def generated(**kwargs):
+            return torch.cat((kwargs["input_ids"], torch.tensor([[3, 2]])), dim=1)
+        with patch.object(instance.model, "generate", side_effect=generated):
+            result = instance.evaluate({"splits": ["validation"], "max_new_tokens": 32})
+        self.assertEqual(result["metrics"]["validation"]["numeric_match"], .5)
+        self.assertEqual([row["numeric_match"] for row in result["samples"]], [1., 0.])
+        self.assertEqual(result["metrics"]["validation"]["exact_match"], 0.)
+
     def test_objective_answers_stream_before_next_row_with_completed_progress(self):
         instance = engine()
         events = []

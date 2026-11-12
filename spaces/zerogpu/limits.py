@@ -15,8 +15,8 @@ def space_limits():
     """Operator overrides opt into larger requests, not guaranteed GPU capacity."""
     result = {}
     for field, default, minimum, maximum in (
-        ("max_new_tokens", DEFAULT_MAX_NEW_TOKENS, 1, CORE_MAX_NEW_TOKENS),
-        ("max_seq_length", DEFAULT_MAX_SEQ_LENGTH, 32, CORE_MAX_SEQ_LENGTH),
+        ("max_new_tokens", 512, 1, CORE_MAX_NEW_TOKENS),
+        ("max_seq_length", 2048, 32, CORE_MAX_SEQ_LENGTH),
     ):
         name = "VESPASIAN_SPACE_" + field.upper()
         raw = os.environ.get(name, str(default))

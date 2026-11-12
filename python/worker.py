@@ -5,12 +5,15 @@ from __future__ import annotations
 import collections
 import contextlib
 import copy
+from decimal import Decimal, InvalidOperation
+from fractions import Fraction
 import hashlib
 import json
 import math
 import os
 from pathlib import Path
 import random
+import re
 import sys
 import time
 import uuid
@@ -30,6 +33,56 @@ def token_f1(prediction: str, target: str) -> float:
         return float(predicted == expected)
     overlap = sum((collections.Counter(predicted) & collections.Counter(expected)).values())
     return 2.0 * overlap / (len(predicted) + len(expected))
+
+
+_NUMBER = r"[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:[eE][-+]?\d+)?|[-+]?\.\d+"
+
+
+def final_number(text: str) -> Fraction | None:
+    """Extract a final scalar answer, preferring GSM8K and boxed answer markers."""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).replace("−", "-")
+    if re.search(r"<think>", text, re.IGNORECASE):
+        return None
+    text = re.sub(rf"\\(?:dfrac|tfrac|frac)\s*\{{\s*({_NUMBER})\s*\}}\s*\{{\s*({_NUMBER})\s*\}}", r"\1/\2", text)
+    explicit = list(re.finditer(r"####[^\S\n]*([^\n]*)|\\boxed\{([^{}]*)\}", text))
+    declared = bool(explicit)
+    if explicit:
+        marker = explicit[-1]
+        text = marker[1] if marker[1] is not None else marker[2]
+    else:
+        answers = re.findall(r"(?:final\s+answer|the\s+answer|answer)\s*(?:is|=|:)[^\S\n]*([^\n]*)", text, re.IGNORECASE)
+        if answers:
+            text = answers[-1]
+            declared = True
+    # Fractions remain exact. Currency and percent signs do not alter units.
+    scalar = rf"(?<![\w.])(?P<n>{_NUMBER})(?:\s*/\s*(?P<d>{_NUMBER}))?(?!\w|\.\d)"
+    if declared:
+        # A declared answer owns the immediately following scalar. Explanatory
+        # numbers later on the same line cannot replace it.
+        text = re.sub(r"^[\s*_`$£€¥({\[\]\\]*", "", text)
+        match = re.match(scalar, text)
+    else:
+        matches = list(re.finditer(scalar, text))
+        match = matches[-1] if matches else None
+    if match is None:
+        return None
+    try:
+        values = [Decimal(match[name].replace(",", "")) for name in ("n", "d") if match[name]]
+        if any(len(value.as_tuple().digits) > 1000 or abs(value.as_tuple().exponent) > 1000 for value in values):
+            return None
+        numerator = Fraction(values[0])
+        denominator = Fraction(values[1]) if len(values) > 1 else 1
+        return numerator / denominator
+    except (InvalidOperation, ValueError, ZeroDivisionError, OverflowError):
+        return None
+
+
+def numeric_match(prediction: str, target: str, *, finish_reason: str = "stop") -> float:
+    """Score final numeric equality without rewarding an unfinished calculation."""
+    if finish_reason == "length":
+        return 0.0
+    expected = final_number(target)
+    return float(expected is not None and final_number(prediction) == expected)
 
 
 def file_hash(path: Path) -> str:
@@ -596,6 +649,7 @@ class Engine:
                 if mode == "paired":
                     measured["exact_match"] = normalise(prediction) == normalise(row["target"])
                     measured["token_f1"] = token_f1(prediction, row["target"])
+                    measured["numeric_match"] = numeric_match(prediction, row["target"], finish_reason=finish_reason)
                 totals = metrics.setdefault(row["split"], {key: 0.0 for key in measured} | {"count": 0})
                 totals["count"] += 1
                 for key, value in measured.items():
@@ -608,7 +662,7 @@ class Engine:
                 self.answer("evaluating", label, turn, index, len(rows), sample)
                 self.progress("evaluating", f"{label} · {row['split']} {index}/{len(rows)}", index, len(rows), label=label, turn=turn)
         for totals in metrics.values():
-            for key in ("exact_match", "token_f1", "loss"):
+            for key in ("exact_match", "token_f1", "numeric_match", "loss"):
                 if key in totals:
                     totals[key] /= totals["count"]
         self.progress("evaluating", "Evaluation complete", len(rows), len(rows), label=label, turn=turn)

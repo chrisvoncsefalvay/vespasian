@@ -86,7 +86,7 @@ const MODELS: [(&str, &str, &str); 3] = [
         "Enter a Hugging Face model ID or local directory.",
     ),
 ];
-const METRICS: [(&str, &str, &str); 4] = [
+const METRICS: [(&str, &str, &str); 5] = [
     (
         "auto",
         "Let the editor choose",
@@ -101,6 +101,11 @@ const METRICS: [(&str, &str, &str); 4] = [
         "token_f1",
         "Token F1",
         "Measure overlap between generated and reference answers.",
+    ),
+    (
+        "numeric_match",
+        "Final answer accuracy",
+        "Compare the final number, allowing different worked solutions.",
     ),
     (
         "semantic",

@@ -27,7 +27,7 @@ _FILES = {
     "processor_config.json", "preprocessor_config.json", "image_processor_config.json",
     "video_processor_config.json", "video_preprocessor_config.json",
 }
-_SCORES = {"exact_match", "token_f1", "semantic", "loss", "count"}
+_SCORES = {"exact_match", "token_f1", "numeric_match", "semantic", "loss", "count"}
 _SPLITS = {"edit", "validation", "preserve", "test"}
 _SOURCE_MODELS = {"Qwen/Qwen3.5-0.8B", "google/gemma-3-1b-it"}
 
@@ -266,7 +266,7 @@ def prepare(run: Path, repo: str) -> Prepared:
     if checkpoint.get("source_unchanged") is not True:
         raise PublishError("Publish requires verified unchanged source weights")
     metric = report.get("metric")
-    if metric not in {"exact_match", "token_f1", "semantic"}:
+    if metric not in {"exact_match", "token_f1", "numeric_match", "semantic"}:
         raise PublishError("The run uses an unsupported objective metric")
     root = run / "checkpoint"
     if root.is_symlink() or not root.is_dir():

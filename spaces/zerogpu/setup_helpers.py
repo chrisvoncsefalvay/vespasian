@@ -15,11 +15,12 @@ from limits import DEFAULT_MAX_NEW_TOKENS, DEFAULT_MAX_SEQ_LENGTH, DEFAULT_MAX_R
 ROOT = Path(__file__).resolve().parent
 EXAMPLES = ROOT / "examples" if (ROOT / "examples").is_dir() else ROOT.parent.parent / "examples"
 METRICS = [("Let the editor select", "auto"), ("Exact match", "exact_match"),
-           ("Token F1", "token_f1"), ("Goal score", "semantic")]
+           ("Token F1", "token_f1"), ("Final answer accuracy", "numeric_match"), ("Goal score", "semantic")]
 METRIC_DESCRIPTIONS = {
     "auto": "The editor selects a compatible metric after assessing your examples and objective.",
     "exact_match": "Higher is better. Answers must match the reference after normalising case and whitespace.",
     "token_f1": "Higher is better. The score measures word overlap between each answer and its reference.",
+    "numeric_match": "Higher is better. Compare the final numeric answer, allowing different worked solutions. Answers cut off by the token limit score zero.",
     "semantic": "Higher is better. The editor scores each generated answer against your objective on a scale from 0 to 1.",
 }
 # These are the controller's accounting rates, kept in step with src/budget.rs.
@@ -58,11 +59,15 @@ PRESETS = {
                    "goal": "Write a brief, original scene for each prompt using concrete details, plain language and a restrained tone."},
     },
     "gsm8k": {
-        "label": "GSM8K word problems", "description": "Retrieve sixteen public word problems from openai/gsm8k.",
+        "label": "Improve GSM8K maths", "description": "Improve final-answer accuracy on multi-step maths problems from OpenAI’s GSM8K dataset.",
         "config": {**_BASE, "dataset_location": "hub", "dataset_file": None, "dataset_source": "openai/gsm8k",
-                   "dataset_config": "main", "example_limit": 16, "target_type": "factual", "dataset_mode": "paired",
-                   "prompt_field": "question", "target_field": "answer", "metric": "semantic",
-                   "goal": "Solve each word problem correctly, with a clear calculation and the correct final numeric answer."},
+                   "dataset_config": "main", "example_limit": 32, "target_type": "factual", "dataset_mode": "paired",
+                   "test_dataset_source": "openai/gsm8k", "test_dataset_config": "main", "test_dataset_split": "test", "test_example_limit": 16,
+                   "prompt_field": "question", "target_field": "answer", "metric": "numeric_match",
+                   "max_new_tokens": 512, "max_seq_length": 2048,
+                   "health_checks": ["copying", "arithmetic"], "health_count": 8,
+                   "controls": "Preserve exact copying and basic arithmetic. Keep answers relevant to the question and avoid repeated or unfinished calculations.",
+                   "goal": "Increase final-answer accuracy on GSM8K maths problems. Use correct arithmetic and finish each worked solution with the final numeric answer. Learn from the edit examples and select improvements on validation examples."},
     },
 }
 
@@ -70,7 +75,6 @@ PRESETS = {
 # These small original datasets are also shipped with the terminal package.
 # Metadata contains no user input or credentials and never starts a run.
 STARTER_MANIFEST = EXAMPLES / "starter-manifest.json"
-QUICK_STARTERS = []
 if STARTER_MANIFEST.is_file():
     manifest = json.loads(STARTER_MANIFEST.read_text(encoding="utf-8"))
     if manifest.get("version") != 1 or not isinstance(manifest.get("starters"), list):
@@ -86,10 +90,12 @@ if STARTER_MANIFEST.is_file():
                   "example_limit": sum(item["counts"].values()),
                   **{key: item[key] for key in ("goal", "target_type", "hf_task", "metric", "max_new_tokens")}}
         PRESETS[name] = {"label": item["title"], "description": item["description"], "config": config}
-        detail = {"maths": "Maths and answer format", "parity": "A new label convention",
-                  "geometry": "One held-out shape property", "json": "Canonical JSON string matching"}.get(name, "Original synthetic exercise")
-        QUICK_STARTERS.append({**{key: item[key] for key in ("id", "title", "description")},
-                               "detail": f"{config['example_limit']} examples · {detail}"})
+
+# The guide features a benchmark with its official train/test boundary. Keep the
+# original local presets available for existing CLI examples and saved choices.
+QUICK_STARTERS = [{"id": "gsm8k", "title": PRESETS["gsm8k"]["label"],
+                   "description": PRESETS["gsm8k"]["description"],
+                   "detail": "32 edit/validation examples · 16 held-out test examples · Final answer accuracy"}]
 
 
 def quick_starter_cards():

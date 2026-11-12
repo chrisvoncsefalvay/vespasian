@@ -19,7 +19,7 @@ const BEHAVIOR_SIGNALS: [&str; 10] = [
     "preservation_mismatch",
 ];
 const BEHAVIOR_LIMITATIONS: &str = "Diagnostics are observations, not acceptance scores. Repetition is a conservative heuristic, not proof of an unwanted loop. Length means a generation limit, not an incorrect answer. Termination does not prove completeness. Content/format comparisons cover only whole numeric scalars or valid JSON; other mismatches remain unclassified. No semantic correctness is inferred. Preservation mismatches are reference failures, not necessarily regressions from baseline.";
-const ROLLOUT_FIELDS: [&str; 13] = [
+const ROLLOUT_FIELDS: [&str; 14] = [
     "row_id",
     "split",
     "prompt",
@@ -27,6 +27,7 @@ const ROLLOUT_FIELDS: [&str; 13] = [
     "prediction",
     "exact_match",
     "token_f1",
+    "numeric_match",
     "semantic",
     "loss",
     "generated_tokens",
@@ -68,7 +69,17 @@ pub fn measurements(value: &Value) -> Value {
         if let Some(v) = value.get(split) {
             out.insert(
                 split.into(),
-                pick(v, &["count", "loss", "exact_match", "token_f1", "semantic"]),
+                pick(
+                    v,
+                    &[
+                        "count",
+                        "loss",
+                        "exact_match",
+                        "token_f1",
+                        "numeric_match",
+                        "semantic",
+                    ],
+                ),
             );
         }
     }

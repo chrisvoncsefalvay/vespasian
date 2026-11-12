@@ -165,12 +165,13 @@ class AppRequestTests(unittest.IsolatedAsyncioTestCase):
                 loaded = (await self.call(loader, self.request(), self.inputs(loader, {"starter_input": card["id"]})))[0]
                 file_data = self.returned(loader, loaded, "dataset_file")
                 config = self.app.setup.preset_config(card["id"])
-                config["dataset_file"] = file_data["path"]
+                self.assertIsNone(file_data)
                 config.update(editor="openai", editor_model="gpt-6.1-sol", api_key="fixture-editor-key")
-                preview = self.app.hub.preview_upload(config["dataset_file"], config)
-                self.assertIsNone(preview["error"])
+                preview = self.preview_result()
                 preview.update(_current=True, _fingerprint=self.app.setup.fingerprint(config))
-                config.update(preview_state=preview, test_preview_state={})
+                test_preview = self.preview_result("test")
+                test_preview.update(_current=True, _fingerprint=self.app.setup.fingerprint(config, test=True))
+                config.update(preview_state=preview, test_preview_state=test_preview)
                 run, _ = self.fixture_run()
                 with patch.object(self.app.runtime, "begin", return_value=run) as begin:
                     result = (await self.call("run", self.request(), self.inputs("run", {**config, "dataset_file": file_data})))[0]
@@ -184,7 +185,7 @@ class AppRequestTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNone(started["max_turns"])
                 self.assertEqual(started["reasoning_effort"], "low")
                 self.assertEqual(started["thinking_mode"], "off")
-                self.assertEqual(started["max_seq_length"], 1024)
+                self.assertEqual(started["max_seq_length"], 2048)
                 self.assertEqual(started["max_relative_norm"], 0.1)
                 self.assertEqual(started["editor"], "openai")
                 self.assertEqual(started["api_key"], "fixture-editor-key")
@@ -193,8 +194,8 @@ class AppRequestTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("fixture-editor-key", json.dumps(result["data"]))
 
     async def test_reviewed_inspection_settings_survive_starting_run(self):
-        loader = self.callback("starter_submit", name="load_quick_starter")
-        loaded = (await self.call(loader, self.request(), self.inputs(loader, {"starter_input": "parity"})))[0]
+        loader = self.callback("preset", "input", "preset_changed")
+        loaded = (await self.call(loader, self.request(), self.inputs(loader, {"preset": "parity"})))[0]
         file_data = self.returned(loader, loaded, "dataset_file")
         config = self.app.setup.preset_config("parity")
         config.update(dataset_file=file_data["path"], editor="openai", editor_model="gpt-6.1-sol",
@@ -612,8 +613,8 @@ class AppRequestTests(unittest.IsolatedAsyncioTestCase):
         function = self.callback("preset", "input", "preset_changed")
         result = (await self.call(function, self.request(), self.inputs(function, {"preset": "gsm8k"})))[0]
         self.assertEqual(self.returned(function, result, "dataset_source"), "openai/gsm8k")
-        self.assertEqual(self.returned(function, result, "metric"), "semantic")
-        self.assertEqual(self.returned(function, result, "example_limit"), 16)
+        self.assertEqual(self.returned(function, result, "metric"), "numeric_match")
+        self.assertEqual(self.returned(function, result, "example_limit"), 32)
         self.assertTrue(self.returned(function, result, "goal"))
         for name in ("preview_state", "test_preview_state"):
             self.assertEqual(self.session[self.controls[name]._id], {})

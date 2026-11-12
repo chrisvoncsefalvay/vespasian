@@ -403,6 +403,31 @@ class GPUStateTests(unittest.TestCase):
         self.assertEqual(actual["metrics"], expected["metrics"])
         self.assert_template_unchanged()
 
+    def test_batched_numeric_accuracy_uses_example_counts(self):
+        parts = [
+            {"samples": [{"split": "validation", "numeric_match": 1.0}],
+             "metrics": {"validation": {"count": 1, "numeric_match": 1.0}}, "elapsed_seconds": 1.0},
+            {"samples": [{"split": "validation", "numeric_match": 0.0}, {"split": "validation", "numeric_match": 0.0}],
+             "metrics": {"validation": {"count": 2, "numeric_match": 0.0}}, "elapsed_seconds": 1.0},
+        ]
+        combined = gpu._aggregate(parts)
+        self.assertEqual(combined["metrics"]["validation"]["numeric_match"], 1 / 3)
+        self.assertEqual(combined["metrics"]["validation"]["count"], 3)
+
+    def test_long_maths_answers_reduce_allocation_size(self):
+        self.initialise()
+        with patch.dict(os.environ, {"VESPASIAN_SPACE_SECONDS_PER_TOKEN": "0.05"}):
+            for maximum in (64, 128, 512):
+                request = {"command": "evaluate", "max_new_tokens": maximum}
+                count = gpu._evaluation_batch_size(request)
+                self.assertLessEqual(15 + count * (1.5 + maximum * .05), 120)
+                request["_space_batch"] = {"offset": 0, "count": count, "total": count}
+                self.assertLessEqual(gpu.estimate_duration(str(self.state), request), 120)
+            self.assertEqual(gpu._evaluation_batch_size({"max_new_tokens": 512}), 3)
+        for rate in ("0", "-1", "nan", "inf"):
+            with self.subTest(rate=rate), patch.dict(os.environ, {"VESPASIAN_SPACE_SECONDS_PER_TOKEN": rate}), self.assertRaises(ValueError):
+                gpu._evaluation_batch_size({"max_new_tokens": 512})
+
     def test_batched_evaluation_matches_core_and_streams_global_progress(self):
         self.fixture.dataset += [
             {"prompt": "epsilon", "target": "ef", "split": "validation"},
@@ -653,9 +678,9 @@ class GPUStateTests(unittest.TestCase):
             duration = gpu.estimate_duration(str(self.state), {"command": "evaluate", "max_new_tokens": 128})
         self.assertGreaterEqual(duration, 20)
         self.assertLessEqual(duration, 120)
-        invalid = list(gpu.dispatch(str(self.state), {"id": 500, "command": "evaluate", "max_new_tokens": 129}))
+        invalid = list(gpu.dispatch(str(self.state), {"id": 500, "command": "evaluate", "max_new_tokens": 513}))
         self.assertFalse(invalid[-1]["ok"])
-        self.assertIn("128", invalid[-1]["error"])
+        self.assertIn("512", invalid[-1]["error"])
 
 
 if __name__ == "__main__":

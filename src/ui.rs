@@ -1226,13 +1226,19 @@ fn detail_lines(state: &Dashboard, width: u16) -> Vec<Line<'static>> {
                     field(example, "scoring").replace('_', " ")
                 ));
             }
-            if let Some(exact) = example["exact_match"].as_bool() {
-                measures.push(format!("Exact {}", if exact { "match" } else { "miss" }));
-            } else if let Some(exact) = example["exact_match"].as_f64() {
-                measures.push(format!("Exact {:.0}%", exact * 100.0));
-            }
-            if let Some(f1) = example["token_f1"].as_f64().filter(|v| v.is_finite()) {
-                measures.push(format!("F1 {:.1}%", f1 * 100.0));
+            if state.metric == "numeric_match" {
+                if let Some(numeric) = example["numeric_match"].as_f64().filter(|v| v.is_finite()) {
+                    measures.push(format!("Final answer {:.0}%", numeric * 100.0));
+                }
+            } else {
+                if let Some(exact) = example["exact_match"].as_bool() {
+                    measures.push(format!("Exact {}", if exact { "match" } else { "miss" }));
+                } else if let Some(exact) = example["exact_match"].as_f64() {
+                    measures.push(format!("Exact {:.0}%", exact * 100.0));
+                }
+                if let Some(f1) = example["token_f1"].as_f64().filter(|v| v.is_finite()) {
+                    measures.push(format!("F1 {:.1}%", f1 * 100.0));
+                }
             }
             if let Some(loss) = example["loss"].as_f64().filter(|v| v.is_finite()) {
                 measures.push(format!("Loss {loss:.4}"));
@@ -2046,6 +2052,7 @@ fn field(value: &Value, key: &str) -> String {
 fn metric_label(metric: &str) -> &str {
     match metric {
         "token_f1" => "Token F1",
+        "numeric_match" => "Final answer accuracy",
         "exact_match" => "Exact match",
         "semantic" => "Goal score",
         _ => metric,

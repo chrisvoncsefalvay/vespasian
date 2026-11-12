@@ -357,7 +357,7 @@ def create_app():
         return f'<p class="vs-suggestion">{html.escape(setup.objective_suggestion(target, mode, reference, text))}</p>'
 
     def metric_help(metric):
-        text = {"auto": "The editor assesses your examples and chooses a compatible metric before proposing edits.", "exact_match": "Higher is better. The generated answer is compared with the reference using the experiment’s answer normalisation.", "token_f1": "Higher is better. Token F1 measures overlap between the generated answer and the reference.", "semantic": "Higher is better. The frontier editor scores each answer against your objective and preservation requirements."}.get(metric, "")
+        text = {"auto": "The editor assesses your examples and chooses a compatible metric before proposing edits.", "exact_match": "Higher is better. The generated answer is compared with the reference using the experiment’s answer normalisation.", "token_f1": "Higher is better. Token F1 measures overlap between the generated answer and the reference.", "numeric_match": "Higher is better. Compare the final numeric answer with the reference. Worked solutions may differ. Answers cut off by the token limit score zero.", "semantic": "Higher is better. The frontier editor scores each answer against your objective and preservation requirements."}.get(metric, "")
         return f'<p class="vs-inline-note">{text}</p>'
 
     def editor_changed(provider, model, memory):

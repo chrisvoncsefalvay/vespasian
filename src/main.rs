@@ -127,7 +127,7 @@ struct Cli {
     #[arg(long)]
     publish_create: bool,
     /// Objective metric. Auto lets the editor assess the dataset
-    #[arg(long,default_value="auto",value_parser=["auto","exact_match","token_f1","semantic"])]
+    #[arg(long,default_value="auto",value_parser=["auto","exact_match","token_f1","numeric_match","semantic"])]
     metric: String,
     /// Frontier inference budget in USD
     #[arg(long, default_value_t = 10.0)]
@@ -1311,7 +1311,7 @@ async fn run(
         .filter(|r| r.split != "test")
         .take(24)
         .collect();
-    let mut assessment=frontier(cli,editor_model,&json!({"task":"Assess whether these text examples provide a useful measurable direction for the user's goal. Mark suitable if an honest small experiment can be run. Perfection or proven improvement is not required. Choose exact_match for strict answer/format tasks, token_f1 for reference-overlap tasks, semantic for style or other rubric-based judgement. Preservation examples are shown when supplied. Test examples remain sealed and must never be requested. No autograd or backpropagation is used. This is direct tensor surgery and measured hill climbing. For corpus mode, target texts are style examples, not answers to reproduce, and the model generates unconditionally. For prompts mode, there are no reference answers and the goal supplies the scoring rubric. Both modes require semantic scoring. Explain any limitation in the plan, rejecting only incompatible or unusable data. Honour requested_metric if it is not auto.","goal":cli.goal,"controls":cli.controls,"dataset_mode":data.mode,"hf_task":cli.hf_task,"requested_metric":cli.metric,"counts":data.counts,"examples":assessment_examples}),&editor::assessment_schema(),output,"assessment",events,b).await?;
+    let mut assessment=frontier(cli,editor_model,&json!({"task":"Assess whether these text examples provide a useful measurable direction for the user's goal. Mark suitable if an honest small experiment can be run. Perfection or proven improvement is not required. Choose exact_match for strict answer/format tasks, token_f1 for reference-overlap tasks, numeric_match for final numeric answers such as GSM8K (completed outputs only, ignores differences in worked solutions), semantic for style or other rubric-based judgement. Preservation examples are shown when supplied. Test examples remain sealed and must never be requested. No autograd or backpropagation is used. This is direct tensor surgery and measured hill climbing. For corpus mode, target texts are style examples, not answers to reproduce, and the model generates unconditionally. For prompts mode, there are no reference answers and the goal supplies the scoring rubric. Both modes require semantic scoring. Explain any limitation in the plan, rejecting only incompatible or unusable data. Honour requested_metric if it is not auto.","goal":cli.goal,"controls":cli.controls,"dataset_mode":data.mode,"hf_task":cli.hf_task,"requested_metric":cli.metric,"counts":data.counts,"examples":assessment_examples}),&editor::assessment_schema(),output,"assessment",events,b).await?;
     if cli.metric != "auto" {
         assessment["metric"] = json!(cli.metric);
     }
@@ -1319,7 +1319,7 @@ async fn run(
     let key = assessment["metric"]
         .as_str()
         .context("Assessment omitted its metric")?;
-    if !["exact_match", "token_f1", "semantic"].contains(&key) {
+    if !["exact_match", "token_f1", "numeric_match", "semantic"].contains(&key) {
         bail!("Editor selected an unsupported metric")
     }
     events.emit(json!({"type":"assessment","suitable":assessment["suitable"],"reason":assessment["reason"],"plan":assessment["plan"],"metric":key}))?;
@@ -2518,6 +2518,28 @@ mod cli_tests {
         assert_eq!(cli.dataset.unwrap().to_string_lossy(), "hf://openai/gsm8k");
         assert_eq!(cli.budget, 0.75);
         assert_eq!(cli.metric, "semantic");
+    }
+
+    #[test]
+    fn numeric_accuracy_is_a_supported_paired_objective() {
+        let cli = Cli::try_parse_from([
+            "vespasian",
+            "hf://openai/gsm8k",
+            "--metric",
+            "numeric_match",
+        ])
+        .unwrap();
+        assert_eq!(cli.metric, "numeric_match");
+        assert_eq!(
+            metric_for_mode(&cli.metric, "paired").unwrap(),
+            "numeric_match"
+        );
+        assert!(metric_for_mode(&cli.metric, "corpus").is_err());
+        assert!(editor::assessment_schema()["properties"]["metric"]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "numeric_match"));
     }
 
     #[test]

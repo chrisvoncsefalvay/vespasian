@@ -310,7 +310,7 @@ impl OpenAiUsage {
 pub fn assessment_schema() -> Value {
     json!({"type":"object","additionalProperties":false,"properties":{
         "suitable":{"type":"boolean"},"reason":{"type":"string"},
-        "metric":{"type":"string","enum":["exact_match","token_f1","semantic"]},"plan":{"type":"string"}},
+        "metric":{"type":"string","enum":["exact_match","token_f1","numeric_match","semantic"]},"plan":{"type":"string"}},
         "required":["suitable","reason","metric","plan"]})
 }
 

@@ -7,6 +7,8 @@
 :root{
   --vs-bg:#14181b;--vs-panel:#1b2123;--vs-paper:#e9e1d1;--vs-muted:#abb3ac;
   --vs-copper:#d6a071;--vs-line:#3c4645;--vs-input-line:#6e7b73;--vs-green:#afbea2;--vs-red:#e0a294;
+  --vs-primary-ink:#14181b;--vs-copy:#d2d6cb;--vs-hover:#2d3029;--vs-field:#111619;--vs-selected:#302e29;
+  --vs-backdrop:#080d11bb;--vs-guide-border:#8d7c64;--vs-shadow:#0007;
   --vs-sans:"IBM Plex Sans",sans-serif;--vs-mono:"IBM Plex Mono",monospace;--vs-display:"Instrument Serif",Georgia,serif;
   --vs-motion-fast:120ms;--vs-motion-enter:240ms;--vs-motion-exit:160ms;--vs-ease-out:cubic-bezier(.25,1,.5,1);
   color-scheme:dark;
@@ -67,6 +69,8 @@ body{margin:0;-webkit-font-smoothing:antialiased}
 .vs-docs span{margin-left:6px}
 .vs-header-links{display:flex;align-items:center;gap:16px;margin-left:auto;white-space:nowrap;font:14px var(--vs-sans)}
 .vs-header-links a{text-decoration:none!important}
+.gradio-container [data-vs-theme-toggle]{border:1px solid var(--vs-input-line);padding:8px 12px;background:transparent;color:var(--vs-paper);cursor:pointer;font:500 14px/1.4 var(--vs-sans)}
+.gradio-container [data-vs-theme-toggle]:hover{background:var(--vs-hover);border-color:var(--vs-copper)}
 [data-vs-help]{background:transparent;border:1px solid var(--vs-line);color:var(--vs-paper);padding:8px 15px;min-height:44px;cursor:pointer;font:500 14px var(--vs-sans)}
 [data-vs-help]:hover{border-color:var(--vs-copper)}
 .vs-kicker{font:400 11px/1.5 var(--vs-mono)!important;letter-spacing:.07em;text-transform:uppercase;color:var(--vs-muted)}
@@ -323,32 +327,73 @@ body{margin:0;-webkit-font-smoothing:antialiased}
 .vs-footer-slash{padding:0 5px;color:var(--vs-copper)}
 .vs-muted{color:var(--vs-muted)}
 
-/* First-use guidance is optional, keyboard accessible and remembered locally. */
-.vs-guide{padding:0;border:1px solid #8d7c64;width:min(660px,calc(100vw - 32px));max-height:calc(100dvh - 40px);overflow:auto;background:#1b2123;color:var(--vs-paper);box-shadow:0 24px 90px #0007;font-family:var(--vs-sans)}
-.vs-guide::backdrop{background:#080d11bb}
-.vs-guide-top{display:flex;align-items:center;justify-content:space-between;padding:16px 22px;border-bottom:1px solid var(--vs-line)}
-.vs-guide-top .vs-kicker{color:var(--vs-copper)}
-.vs-guide button{min-height:44px;border:1px solid var(--vs-input-line);background:transparent;color:var(--vs-paper);font:500 14px/1.4 var(--vs-sans);padding:10px 16px;cursor:pointer}
-.vs-guide button:hover:not(:disabled){border-color:var(--vs-copper);background:#2d3029}
-.vs-guide button:disabled{opacity:.4;cursor:not-allowed}
-.vs-guide .vs-guide-close{border:0;min-width:44px;padding:0;font:400 27px var(--vs-sans)}
-.vs-guide-body{padding:28px 32px 26px}
-.vs-guide-index{color:var(--vs-copper);font:12px var(--vs-mono);margin-bottom:14px}
-.vs-guide h2{font:400 36px/1.13 var(--vs-display);letter-spacing:-.015em;margin:0 0 18px;color:var(--vs-paper);max-width:24ch}
-.vs-guide h2:focus{outline:none!important}
-.vs-guide #vs-guide-description{font:15px/1.75 var(--vs-sans);color:#d2d6cb;margin:0 0 26px;max-width:60ch}
-.vs-guide-diagram{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0;list-style:none;padding:0;margin:0 0 24px;border-top:1px solid #64715e;border-bottom:1px solid #64715e}
-.vs-guide-diagram li{padding:18px 16px;border-left:1px solid var(--vs-line)}
-.vs-guide-diagram li:first-child{border-left:0;padding-left:0}
-.vs-guide-diagram li:last-child{padding-right:0}
-.vs-guide-diagram span{display:block;color:var(--vs-copper);font:12px var(--vs-mono);margin-bottom:10px}
-.vs-guide-diagram strong{font:500 14px/1.5 var(--vs-sans);color:var(--vs-paper)}
-.vs-guide .vs-guide-detail{font:13px/1.6 var(--vs-sans);color:var(--vs-muted);margin:0}
-.vs-guide-footer{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 22px;border-top:1px solid var(--vs-line)}
-.vs-guide-navigation{display:flex;gap:10px}
-.vs-guide .vs-guide-skip{border:0;padding-left:0;color:var(--vs-muted)}
-.vs-guide .vs-guide-next{background:var(--vs-copper);border-color:var(--vs-copper);color:var(--vs-bg)}
-.vs-guide .vs-guide-next:hover{background:#e5b58d!important}
+/* ID scope keeps the guide independent of Gradio's later element resets. */
+#vs-guide{box-sizing:border-box;inset:0;margin:auto;padding:0;border:1px solid var(--vs-guide-border);width:min(820px,calc(100vw - 32px));max-width:none;max-height:calc(100dvh - 32px);overflow:hidden;background:var(--vs-panel);color:var(--vs-paper);box-shadow:0 24px 90px var(--vs-shadow);font-family:var(--vs-sans)}
+#vs-guide[open]{display:grid;grid-template-rows:auto auto minmax(0,1fr) auto}
+#vs-guide>div{min-width:0}
+#vs-guide::backdrop{background:var(--vs-backdrop)}
+#vs-guide .vs-guide-top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 24px;border-bottom:1px solid var(--vs-line)}
+#vs-guide .vs-guide-top .vs-kicker{color:var(--vs-copper);white-space:nowrap}
+#vs-guide .vs-guide-tools{display:flex;align-items:center;gap:8px}
+#vs-guide .vs-guide-tools [data-vs-theme-toggle]{border-color:transparent;color:var(--vs-muted);padding:10px 8px;white-space:nowrap}
+#vs-guide button{appearance:none;min-height:44px;min-width:44px;border:1px solid var(--vs-input-line);background:transparent;color:var(--vs-paper);font:500 14px/1.4 var(--vs-sans);padding:10px 16px;cursor:pointer;text-align:center;white-space:normal}
+#vs-guide button:hover:not(:disabled){border-color:var(--vs-copper);background:var(--vs-hover)}
+#vs-guide button:disabled{opacity:.45;cursor:not-allowed}
+#vs-guide .vs-guide-close{border:0;width:44px;padding:0;font-size:26px!important;font-weight:400!important}
+#vs-guide .vs-guide-body{min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding:28px 32px 32px;scroll-padding:24px}
+#vs-guide .vs-guide-index{color:var(--vs-copper);font:12px/1.5 var(--vs-mono);margin:0 0 12px}
+#vs-guide h2{font:400 36px/1.15 var(--vs-display);letter-spacing:-.015em;margin:0 0 16px;color:var(--vs-paper);max-width:26ch}
+#vs-guide h2:focus{outline:none!important}
+#vs-guide #vs-guide-description{font:15px/1.65 var(--vs-sans);color:var(--vs-copy);margin:0 0 24px;max-width:65ch}
+#vs-guide .vs-guide-diagram{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0;list-style:none;padding:0;margin:0 0 24px;border-top:1px solid var(--vs-line);border-bottom:1px solid var(--vs-line)}
+#vs-guide .vs-guide-diagram li{padding:16px 12px;display:grid;align-content:start;gap:8px}
+#vs-guide .vs-guide-diagram span{display:block;color:var(--vs-copper);font:12px/1.5 var(--vs-mono)}
+#vs-guide .vs-guide-diagram strong{font:500 14px/1.5 var(--vs-sans);color:var(--vs-paper)}
+#vs-guide .vs-guide-detail{font:13px/1.65 var(--vs-sans);color:var(--vs-muted);margin:0}
+#vs-guide .vs-guide-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 24px;border-top:1px solid var(--vs-line);background:var(--vs-panel)}
+#vs-guide .vs-guide-navigation{display:flex;gap:8px}
+#vs-guide .vs-guide-skip{border-color:transparent;padding:10px 0;color:var(--vs-muted)}
+#vs-guide .vs-guide-next{background:var(--vs-copper);border-color:var(--vs-copper);color:var(--vs-primary-ink)}
+#vs-guide .vs-guide-next:hover:not(:disabled){background:var(--vs-copper);filter:brightness(1.08)}
+#vs-guide .vs-guide-tabs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;padding:0 24px;border-bottom:1px solid var(--vs-line)}
+#vs-guide .vs-guide-tabs button{padding:12px 0 10px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--vs-muted);white-space:nowrap}
+#vs-guide .vs-guide-tabs button[aria-selected="true"]{border-bottom-color:var(--vs-copper);color:var(--vs-copper)}
+#vs-guide .vs-guide-tabs button:hover:not(:disabled){background:transparent;color:var(--vs-paper);border-bottom-color:var(--vs-copper)}
+#vs-guide .vs-guide-welcome-actions{display:flex;gap:12px;flex-wrap:wrap;margin:0 0 24px}
+#vs-guide .vs-guide-workflow{list-style:decimal;margin:0 0 24px;padding:0 0 0 24px;display:grid;gap:20px}
+#vs-guide .vs-guide-workflow li{padding-left:6px;color:var(--vs-copper)}
+#vs-guide .vs-guide-workflow strong{font:500 16px/1.5 var(--vs-sans);color:var(--vs-paper)}
+#vs-guide .vs-guide-workflow p{margin:6px 0 0;color:var(--vs-copy);font:14px/1.65 var(--vs-sans)}
+#vs-guide .vs-guide-starters{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:0 0 24px}
+#vs-guide .vs-guide-starters button{text-align:left;display:flex;flex-direction:column;align-items:flex-start;gap:10px;padding:20px;min-width:0}
+#vs-guide .vs-guide-starters button:only-child{grid-column:1/-1}
+#vs-guide .vs-guide-starters strong{font:500 18px/1.35 var(--vs-sans)}
+#vs-guide .vs-guide-starters span{color:var(--vs-copy);font:14px/1.6 var(--vs-sans)}
+#vs-guide .vs-guide-starters small{margin-top:auto;color:var(--vs-copper);font:12px/1.5 var(--vs-mono)}
+#vs-guide .vs-guide-feedback:empty{display:none}
+#vs-guide .vs-guide-feedback{font:14px/1.6 var(--vs-sans);color:var(--vs-copper);margin:16px 0 0}
+@media(max-width:600px){
+  #vs-guide{width:calc(100vw - 24px);max-height:calc(100dvh - 24px)}
+  #vs-guide .vs-guide-top{padding:6px 12px;gap:8px}
+  #vs-guide .vs-guide-tools{gap:4px}
+  #vs-guide .vs-guide-tools [data-vs-theme-toggle]{padding-left:4px;padding-right:4px}
+  #vs-guide .vs-guide-tabs{gap:8px;padding:0 16px}
+  #vs-guide .vs-guide-body{padding:24px 20px}
+  #vs-guide .vs-guide-index{display:none}
+  #vs-guide h2{font-size:30px}
+  #vs-guide .vs-guide-footer{padding:12px 16px;gap:8px}
+  #vs-guide .vs-guide-navigation{gap:8px}
+  #vs-guide .vs-guide-navigation button{padding:10px 12px}
+  #vs-guide .vs-guide-starters{grid-template-columns:1fr}
+  #vs-guide .vs-guide-welcome-actions{flex-direction:column}
+  #vs-guide .vs-guide-welcome-actions button{width:100%}
+  #vs-guide .vs-guide-diagram{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-height:500px){
+  #vs-guide{max-height:calc(100dvh - 16px)}
+  #vs-guide .vs-guide-top,#vs-guide .vs-guide-footer{padding-top:4px;padding-bottom:4px}
+  #vs-guide .vs-guide-body{padding-top:20px;padding-bottom:20px}
+}
 
 /* Gradio scopes media rules, so the body-level guide follows the JS motion preference. */
 .vs-guide[data-vs-motion="on"]{opacity:0;transform:translateY(6px);transition:opacity var(--vs-motion-exit) var(--vs-ease-out),transform var(--vs-motion-exit) var(--vs-ease-out),display var(--vs-motion-exit) allow-discrete,overlay var(--vs-motion-exit) allow-discrete}
@@ -400,9 +445,11 @@ body{margin:0;-webkit-font-smoothing:antialiased}
   #vs-live-actions{flex-wrap:wrap!important}#vs-live-actions #vs-status{flex-basis:100%!important}#vs-live-actions button{min-width:140px!important;flex:1!important}
   .vs-result-summary{padding:18px}.vs-result-grid{gap:18px}.vs-run-heading{gap:16px}
   .gradio-container .vs-run-heading h2{font-size:34px!important}.vs-run-state small{max-width:180px;overflow-wrap:anywhere}
-  .vs-guide-body{padding:24px}.vs-guide h2{font-size:32px}
 }
 @media(max-width:480px){
+  .vs-masthead{flex-wrap:wrap;gap:12px;padding-bottom:16px}
+  .vs-header-links{width:100%;gap:12px;justify-content:flex-start;margin-left:0}
+  .vs-header-links>[data-vs-help]{margin-left:0}
   #vs-setup-tabs [role="tablist"]{overflow-x:auto!important;flex-wrap:nowrap!important}
   #vs-setup-tabs [role="tablist"] button{flex:0 0 auto!important;min-width:max-content!important}
   #vs-review dl,.vs-review-grid{grid-template-columns:1fr}
@@ -421,11 +468,6 @@ body{margin:0;-webkit-font-smoothing:antialiased}
   .gradio-container .vs-section-heading h3{font-size:26px!important}.vs-turn-toolbar button{min-width:56px;padding:9px 11px}
   .vs-run-state>span,.vs-run-state small{font-size:11px}.vs-run-state small{max-width:150px}
   .vs-dashboard-footnote,.vs-page-footer{align-items:flex-start;font-size:10px;gap:12px}.vs-page-footer>span{max-width:240px}
-  .vs-guide{width:calc(100vw - 24px);max-height:calc(100dvh - 24px)}.vs-guide-body{padding:22px}.vs-guide h2{font-size:30px}
-  .vs-guide-top,.vs-guide-footer{padding:12px 16px}.vs-guide-diagram{grid-template-columns:1fr}
-  .vs-guide-diagram li,.vs-guide-diagram li:first-child,.vs-guide-diagram li:last-child{display:flex;align-items:center;gap:16px;padding:12px 0;border-left:0;border-bottom:1px solid var(--vs-line)}
-  .vs-guide-diagram li:last-child{border-bottom:0}.vs-guide-diagram span{margin:0}.vs-guide-diagram strong{font-size:14px}
-  .vs-guide-footer{align-items:flex-start;gap:8px}.vs-guide-navigation{gap:8px}.vs-guide button{font-size:13px;padding:10px 12px}
 }
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 
@@ -462,27 +504,4 @@ body{margin:0;-webkit-font-smoothing:antialiased}
 .vs-patch-status { padding: 14px 16px; margin: 14px 0; border: 1px solid #434a49; overflow-wrap: anywhere; }
 .vs-patch-status p { margin: 6px 0 0; color: #aeb8b3; font-size: 13px; }
 
-/* The four-part guide keeps navigation visible while long sections scroll. */
 #vs-starter-input,#vs-starter-submit{display:none!important}
-.vs-guide{width:min(800px,calc(100vw - 32px));overflow:auto}
-.vs-guide-tabs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;padding:10px 16px;border-bottom:1px solid var(--vs-line)}
-.vs-guide-tabs button{padding:10px 8px;font-size:13px;border-color:transparent}
-.vs-guide-tabs button[aria-selected="true"]{background:#302e29;border-color:var(--vs-copper);color:var(--vs-copper)}
-.vs-guide-welcome-actions{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:24px}
-.vs-guide-workflow{margin:0 0 24px;padding-left:24px;display:grid;gap:16px}
-.vs-guide-workflow li{padding-left:6px;color:var(--vs-copper)}
-.vs-guide-workflow strong{font:500 15px/1.5 var(--vs-sans);color:var(--vs-paper)}
-.vs-guide-workflow p{margin:5px 0 0;color:#d2d6cb;font:14px/1.65 var(--vs-sans)}
-.vs-guide-starters{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:0 0 24px}
-.vs-guide-starters button{text-align:left;display:flex;flex-direction:column;align-items:flex-start;gap:10px;padding:18px;min-width:0}
-.vs-guide-starters strong{font:500 17px/1.35 var(--vs-sans)}
-.vs-guide-starters span{color:#d2d6cb;font:14px/1.6 var(--vs-sans)}
-.vs-guide-starters small{margin-top:auto;color:var(--vs-copper);font:12px/1.5 var(--vs-mono)}
-.vs-guide-feedback:empty{display:none}
-.vs-guide-feedback{font:14px/1.6 var(--vs-sans);color:var(--vs-copper)}
-@media(max-width:600px){
-  .vs-guide-tabs{grid-template-columns:repeat(2,minmax(0,1fr));padding:8px 12px}
-  .vs-guide-starters{grid-template-columns:1fr}
-  .vs-guide-welcome-actions{flex-direction:column}
-  .vs-guide-welcome-actions button{width:100%}
-}

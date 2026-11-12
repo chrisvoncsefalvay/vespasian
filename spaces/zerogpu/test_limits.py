@@ -10,7 +10,7 @@ from limits import space_limits
 class DeploymentLimitTests(unittest.TestCase):
     def test_defaults_and_operator_overrides(self):
         with patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(space_limits(), {"max_new_tokens": 128, "max_seq_length": 1024})
+            self.assertEqual(space_limits(), {"max_new_tokens": 512, "max_seq_length": 2048})
         with patch.dict(os.environ, {"VESPASIAN_SPACE_MAX_NEW_TOKENS": "32768", "VESPASIAN_SPACE_MAX_SEQ_LENGTH": "131072"}):
             self.assertEqual(space_limits(), {"max_new_tokens": 32768, "max_seq_length": 131072})
 

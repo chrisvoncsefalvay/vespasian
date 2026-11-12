@@ -60,7 +60,7 @@ def _release_version(directory: Path) -> str | None:
 RELEASE_VERSION = _release_version(Path(__file__).resolve().parent)
 RELEASE_LABEL = f"v{RELEASE_VERSION}" if RELEASE_VERSION else "Version unavailable"
 ASSET_DIR = Path(__file__).resolve().parent / "assets"
-CSS = (ASSET_DIR / "workbench.css").read_text(encoding="utf-8").replace(
+CSS = "\n".join((ASSET_DIR / name).read_text(encoding="utf-8") for name in ("workbench.css", "themes.css")).replace(
     "__ASSETS__", f"/gradio_api/file={ASSET_DIR.as_posix()}"
 )
 THEME = gr.themes.Base(
@@ -118,7 +118,7 @@ _MARK = '<svg viewBox="0 0 30 30" aria-hidden="true"><path d="M3 7 15 24 27 7M9 
 HEADER = f"""<header class="vs-masthead">
 <a class="vs-wordmark" href="https://github.com/chrisvoncsefalvay/vespasian" target="_blank" rel="noopener noreferrer">{_MARK}<h1>Vespasian</h1></a>
 <span class="vs-masthead-meta">The Weight Space Editing Assistant/{RELEASE_LABEL}</span>
-<nav class="vs-header-links" aria-label="Help and documentation"><button type="button" data-vs-help>Quick guide</button><a href="https://github.com/chrisvoncsefalvay/vespasian#readme" target="_blank" rel="noopener noreferrer">Documentation ↗</a></nav>
+<nav class="vs-header-links" aria-label="Appearance and help"><button type="button" data-vs-theme-toggle aria-label="Switch to light mode">Light mode</button><button type="button" data-vs-help>Quick guide</button><a href="https://github.com/chrisvoncsefalvay/vespasian#readme" target="_blank" rel="noopener noreferrer">Documentation ↗</a></nav>
 </header>"""
 PREVIEW_EMPTY = '<div class="vs-preview-empty"><h3>Preview your examples</h3><p>Choose a dataset and inspect it to select fields and check the examples the model will use.</p></div>'
 

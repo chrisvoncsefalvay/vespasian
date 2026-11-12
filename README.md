@@ -107,7 +107,7 @@ vespasian examples/concise.jsonl --task text-generation \
   --editor codex
 ```
 
-Goals are free-form. The frontier editor first checks whether the examples support a useful experiment and selects an evaluation measure. Set `--metric exact_match`, `--metric token_f1` or `--metric semantic` to choose the measure yourself. `--max-turns` optionally limits proposed changes independently of the dollar budget. It has no default cap.
+Goals are free-form. The frontier editor first checks whether the examples support a useful experiment and selects an evaluation measure. Set `--metric exact_match`, `--metric token_f1`, `--metric numeric_match` or `--metric semantic` to choose the measure yourself. `--max-turns` optionally limits proposed changes independently of the dollar budget. It has no default cap.
 
 | Example | Behaviour | Mode |
 | --- | --- | --- |
@@ -116,16 +116,15 @@ Goals are free-form. The frontier editor first checks whether the examples suppo
 | [style.jsonl](examples/style.jsonl) | Generate prose in the style of supplied passages | `corpus` |
 | [style-prompts.jsonl](examples/style-prompts.jsonl) | Answer writing prompts against a style goal | `prompts` |
 
-### Four small starters
+### Start with GSM8K
 
-The Space first-use guide has four sections: **Welcome**, **Weight-space editing**, **How to use** and **Quick starters**. Sign in to Hugging Face or proceed without login. Selecting a starter fills the task, objective, dataset and runtime defaults, then opens Data for inspection. It preserves your target model and editor credentials. **Start experiment** then runs a real paid weight-editing hill climb with your editor API and chosen budget; selecting a card alone does not spend.
+The Space guide has four tabs: **Welcome**, **Method**, **Setup** and **Examples**. It opens with Hugging Face sign-in and a walkthrough of weight editing. Its **Improve GSM8K maths** starter connects [OpenAI’s GSM8K dataset](https://huggingface.co/datasets/openai/gsm8k), selects final-answer accuracy and opens Data for inspection. Your target model and editor credentials stay selected. The light/dark toggle follows your system preference until you choose a theme, then remembers your choice.
 
-- **Short maths answers:** solve simple word problems with a bare integer answer.
-- **Odd/even codes:** learn a new label convention while preserving explicit ordinary-label requests.
-- **Geometric alias:** give a word a geometric meaning and test a held-out shape property.
-- **Compact JSON:** extract two fields in a specified canonical JSON format while respecting explicit overrides.
+The preset uses 32 problems from the official training split, divided into 26 edit examples and six validation examples. Sixteen problems from the official test split measure the final checkpoint. Change both example limits in Data. The imported files record the dataset revision and retain the worked reference solutions.
 
-These are small, original synthetic adaptations inspired by [weight-space programming](https://rikiyat.github.io/blog/weight-space-programming/) and [IWIBench](https://github.com/HCLTech-robotics/iwibench), not benchmark reproductions or promises of improvement. Each includes separate edit, validation, held-out test and preservation examples. Exact-match measures answer format as well as content. The same JSONL files work in the terminal; [starter settings, provenance and scoring caveats](examples/STARTERS.md) explain how to run them.
+**Final answer accuracy** compares numeric answers independently of the wording of a worked solution. It recognises `####` and boxed answers, then explicit final-answer phrases, and otherwise uses the last number. Commas, decimal notation and numeric fractions are normalised. Answers cut off by the generation limit score zero. The preset allows 512 generated tokens and a 2,048-token context, with copying and arithmetic health checks.
+
+Inspect both data previews, choose your editor and USD budget, then select **Start experiment**. The chart tracks validation accuracy through the hill climb, and the completed run includes the held-out test score. The [original local JSONL examples](examples/STARTERS.md) remain available for custom experiments.
 
 ## The terminal
 
@@ -394,7 +393,7 @@ Exact ROME, MEMIT and stored-patch composition are explicitly unavailable, rathe
 
 Activation probes are read-only forward passes over explicitly selected edit/validation/preservation row IDs, sources (prompt, reference or measured generation) and token positions. Results contain bounded statistics and state-bound direction handles, not full activation vectors. The new direction operation applies `W - strength * outer(u, mask * (u^T W))` to one inspected target, with 1–256 selected columns. It requires a handle measured on that same target and rejects changes exceeding `--max-relative-norm` after dtype rounding. Default ceiling: 0.1; reviewed range: 0.000001–1. This does not raise the bounds of other operations. Ordinary supported Linear modules can be probed; decoder-residual hooks and cross-module direction transfer are not implemented.
 
-Target-model thinking is separate from frontier-editor reasoning effort. `--thinking-mode off` preserves the starter default, `on` requires a compatible chat template, and `auto` uses the template's default. Core limits allow up to 32,768 generated tokens and 131,072 context tokens, subject to model/hardware compatibility. Set both limits explicitly for long traces; generation plus prompt must fit the context. The Space defaults to its smaller operator limits (128 generated tokens, 1,024 context tokens), shown in Advanced. This is not a promise that a long reasoning experiment fits a ZeroGPU allocation. Previously saved baselines keep their original settings.
+Target-model thinking is separate from frontier-editor reasoning effort. `--thinking-mode off` preserves the starter default, `on` requires a compatible chat template, and `auto` uses the template's default. Core limits allow up to 32,768 generated tokens and 131,072 context tokens, subject to model/hardware compatibility. Set both limits explicitly for long traces; generation plus prompt must fit the context. The Space starts at 128 generated tokens and a 1,024-token context. Its standard ceilings are 512 generated tokens and a 2,048-token context, shown in Advanced. The GSM8K preset uses those ceilings. Previously saved baselines keep their original settings.
 
 Published loop/productive excerpts test only diagnostic behavior. No real long-thinking loop repair or exact reproduction of the published experiment has been demonstrated by these tests.
 

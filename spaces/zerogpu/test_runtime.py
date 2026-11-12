@@ -68,17 +68,17 @@ class RuntimeTests(unittest.TestCase):
                 config = {**self.config, **setup.preset_config(card["id"])}
                 runtime.validate(config)
                 with patch.object(runtime, "ROOT", self.root), patch.dict(os.environ, {}, clear=True):
-                    args = runtime.command(config, config["dataset_file"], self.root / "output", "a" * 40)
+                    args = runtime.command(config, "prepared-gsm8k.jsonl", self.root / "output", "a" * 40)
                 self.assertEqual(args[0], str(binary))
-                self.assertEqual(args[1], config["dataset_file"])
+                self.assertEqual(args[1], "prepared-gsm8k.jsonl")
                 self.assertEqual(args[args.index("--editor") + 1], "openai")
                 self.assertEqual(args[args.index("--budget-policy") + 1], "strict")
                 self.assertEqual(float(args[args.index("--budget") + 1]), 10)
                 self.assertEqual(args[args.index("--reasoning-effort") + 1], "low")
                 self.assertEqual(args[args.index("--thinking-mode") + 1], "off")
-                self.assertEqual(args[args.index("--max-seq-length") + 1], "1024")
+                self.assertEqual(args[args.index("--max-seq-length") + 1], "2048")
                 self.assertEqual(args[args.index("--max-relative-norm") + 1], "0.1")
-                self.assertEqual(args[args.index("--metric") + 1], "exact_match")
+                self.assertEqual(args[args.index("--metric") + 1], "numeric_match")
                 self.assertIn("--save-trajectory", args)
                 self.assertNotIn("--max-turns", args)
                 self.assertNotIn("evaluate", args)
@@ -93,7 +93,7 @@ class RuntimeTests(unittest.TestCase):
         config = {**self.config, "thinking_mode": "on", "max_new_tokens": 32768,
                   "max_seq_length": 131072, "max_relative_norm": 0.75}
         with patch.dict(os.environ, {}, clear=True):
-            with self.assertRaisesRegex(ValueError, "128"):
+            with self.assertRaisesRegex(ValueError, "512"):
                 runtime.validate(config)
         with patch.dict(os.environ, {"VESPASIAN_SPACE_MAX_NEW_TOKENS": "32768", "VESPASIAN_SPACE_MAX_SEQ_LENGTH": "131072"}):
             runtime.validate(config)
@@ -115,7 +115,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_inspection_settings_reject_invalid_and_incompatible_values(self):
         for field, values in (("thinking_mode", ("none", True, None)),
-                              ("max_seq_length", (31, 1025, 32.5, True, float("nan"))),
+                              ("max_seq_length", (31, 2049, 32.5, True, float("nan"))),
                               ("max_relative_norm", (0, 0.0000001, -0.1, 1.01, True, float("nan"), float("inf")))):
             for value in values:
                 with self.subTest(field=field, value=value), patch.dict(os.environ, {}, clear=True), self.assertRaises(ValueError):

@@ -37,7 +37,7 @@ class SetupTests(unittest.TestCase):
         for name in setup.PRESETS:
             config = setup.preset_config(name)
             self.assertEqual(config["thinking_mode"], "off")
-            self.assertEqual(config["max_seq_length"], 1024)
+            self.assertEqual(config["max_seq_length"], 2048 if name == "gsm8k" else 1024)
             self.assertEqual(config["max_relative_norm"], 0.1)
         config = {**self.config(), "thinking_mode": "on", "max_new_tokens": 32768,
                   "max_seq_length": 131072, "max_relative_norm": 1}
@@ -129,12 +129,10 @@ class SetupTests(unittest.TestCase):
         config["health_checks"].clear()
         self.assertEqual(setup.preset_config("greetings")["health_checks"], ["copying"])
 
-    def test_four_quick_starters_load_complete_bundled_datasets(self):
+    def test_original_bundled_presets_remain_usable(self):
         import json
         import hashlib
         manifest = json.loads(setup.STARTER_MANIFEST.read_text())
-        self.assertEqual(len(setup.quick_starter_cards()), 4)
-        self.assertEqual({card["id"] for card in setup.quick_starter_cards()}, {item["id"] for item in manifest["starters"]})
         for item in manifest["starters"]:
             with self.subTest(starter=item["id"]):
                 config = setup.preset_config(item["id"])
@@ -158,9 +156,27 @@ class SetupTests(unittest.TestCase):
         cards[0]["title"] = "Changed copy"
         self.assertNotEqual(cards[0]["title"], setup.quick_starter_cards()[0]["title"])
 
+    def test_benchmark_starter_uses_official_training_and_held_out_data(self):
+        cards = setup.quick_starter_cards()
+        self.assertEqual([card["id"] for card in cards], ["gsm8k"])
+        config = setup.preset_config("gsm8k")
+        self.assertEqual(config["dataset_location"], "hub")
+        self.assertEqual(config["dataset_source"], "openai/gsm8k")
+        self.assertEqual(config["dataset_config"], "main")
+        self.assertEqual(config["dataset_split"], "train")
+        self.assertEqual(config["test_dataset_source"], config["dataset_source"])
+        self.assertEqual(config["test_dataset_config"], config["dataset_config"])
+        self.assertEqual(config["test_dataset_split"], "test")
+        self.assertEqual((config["prompt_field"], config["target_field"]), ("question", "answer"))
+        self.assertEqual(config["metric"], "numeric_match")
+        self.assertGreaterEqual(config["max_new_tokens"], 512)
+        self.assertEqual(setup.validate_step(config, "behaviour"), {})
+        self.assertIn(("Final answer accuracy", "numeric_match"), setup.metric_choices("paired"))
+        self.assertNotIn("numeric_match", [value for _, value in setup.metric_choices("corpus")])
+
     def test_hub_split_summary_is_labelled_as_estimate(self):
         counts = setup.split_summary(setup.preset_config("gsm8k"))
-        self.assertEqual((counts["edit"], counts["validation"], counts["test"]), (13, 3, 0))
+        self.assertEqual((counts["edit"], counts["validation"], counts["test"]), (26, 6, 16))
         self.assertFalse(counts["exact"])
         self.assertEqual(counts["label"], "Planned maximum examples")
 

@@ -63,7 +63,7 @@ def _money(value: Any) -> str:
 
 
 def _metric_name(metric: str) -> str:
-    return {"auto": "Objective score", "exact_match": "Exact match", "token_f1": "Token F1", "semantic": "Goal score", "loss": "Reference loss"}.get(metric, metric.replace("_", " ").capitalize())
+    return {"auto": "Objective score", "exact_match": "Exact match", "token_f1": "Token F1", "numeric_match": "Final answer accuracy", "semantic": "Goal score", "loss": "Reference loss"}.get(metric, metric.replace("_", " ").capitalize())
 
 
 def _replay(state: dict) -> dict:
@@ -641,7 +641,7 @@ def comparison_rows(view: dict, selection: dict) -> list[dict]:
     return sorted(rows, key=lambda item: split_order.get(item["split"], 4))
 
 
-def _example_output(answer: dict | None, title: str) -> str:
+def _example_output(answer: dict | None, title: str, metric: str = "auto") -> str:
     if answer is None:
         return f'<section class="vs-answer-output"><h4>{_text(title)}</h4><p class="vs-muted">No output recorded for this checkpoint and example.</p></section>'
     example = _dict(answer.get("example"))
@@ -649,9 +649,11 @@ def _example_output(answer: dict | None, title: str) -> str:
     measures = []
     if isinstance(example.get("passed"), bool):
         measures.append("Passed" if example["passed"] else "Failed")
-    if isinstance(example.get("exact_match"), bool):
+    if metric != "numeric_match" and isinstance(example.get("exact_match"), bool):
         measures.append("Exact match" if example["exact_match"] else "Exact miss")
-    for key, name in (("token_f1", "F1"), ("semantic", "Goal score"), ("loss", "Reference loss")):
+    for key, name in (("token_f1", "F1"), ("numeric_match", "Final answer"), ("semantic", "Goal score"), ("loss", "Reference loss")):
+        if (key == "numeric_match" and metric != key) or (key == "token_f1" and metric == "numeric_match"):
+            continue
         value = _number(example.get(key))
         if value is not None:
             measures.append(f"{name} {_fmt(value, key)}")
@@ -685,7 +687,7 @@ def _answers(view: dict, selection: dict) -> str:
         reference_label = "Style example" if example.get("mode") == "corpus" else "Reference"
         reference = f'<details class="vs-reference" data-vs-details="reference-{_text(item["id"])}"><summary>{reference_label}</summary><p>{_text(target)}</p></details>' if target and example.get("mode") != "prompts" else ""
         identifier = hashlib.sha256(item["id"].encode()).hexdigest()[:16]
-        entries.append(f'<article class="vs-answer-comparison" data-vs-sample="{identifier}"><header><span class="vs-kicker">{_text(item["split"])}</span><h4>{_text(prompt)}</h4></header>{reference}<div class="vs-comparison-grid">{_example_output(item["baseline"], "Baseline")}{_example_output(item["selected"], _turn_name(selection["turn"]))}</div></article>')
+        entries.append(f'<article class="vs-answer-comparison" data-vs-sample="{identifier}"><header><span class="vs-kicker">{_text(item["split"])}</span><h4>{_text(prompt)}</h4></header>{reference}<div class="vs-comparison-grid">{_example_output(item["baseline"], "Baseline", view["metric"])}{_example_output(item["selected"], _turn_name(selection["turn"]), view["metric"])}</div></article>')
     if not entries:
         entries.append('<p class="vs-empty-line">No recorded examples match these filters yet.</p>')
     pagination = f'<div class="vs-page-controls"><button type="button" data-vs-action="page" data-vs-value="{max(0,page-1)}"{" disabled" if page == 0 else ""}>Previous examples</button><span>Page {page+1} of {pages} · {len(rows)} examples</span><button type="button" data-vs-action="page" data-vs-value="{page+1}"{" disabled" if page+1 == pages else ""}>Next examples</button></div>'

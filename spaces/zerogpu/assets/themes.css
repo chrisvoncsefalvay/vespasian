@@ -1,0 +1,106 @@
+/* Theme values live on both roots because Gradio declares its own variables. */
+html[data-vs-theme="light"],html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"]{
+  --vs-bg:#f5f1e8;--vs-panel:#fcf9f2;--vs-paper:#272d29;--vs-muted:#615f56;
+  --vs-copper:#89502c;--vs-line:#cec7b8;--vs-input-line:#8a8274;--vs-green:#3f6846;--vs-red:#9d4034;
+  --vs-primary-ink:#fffaf1;--vs-primary-hover:#754323;--vs-copy:#383e39;--vs-hover:#eee7db;--vs-field:#fffdf7;--vs-selected:#eadfcf;
+  --vs-backdrop:#282a285c;--vs-guide-border:#9f8c6d;--vs-shadow:#43372626;
+  --vs-health-surface:#edf1e6;--vs-health-line:#8c9b7e;--vs-error-surface:#faeae3;
+  color-scheme:light;
+}
+
+/* Cover native Gradio widgets as well as the custom workbench. The explicit
+   light selection also applies when Gradio inherited a dark system theme. */
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"]{
+  --body-background-fill:var(--vs-bg)!important;--body-background-fill-dark:var(--vs-bg)!important;
+  --background-fill-primary:var(--vs-bg)!important;--background-fill-primary-dark:var(--vs-bg)!important;
+  --background-fill-secondary:var(--vs-panel)!important;--background-fill-secondary-dark:var(--vs-panel)!important;
+  --body-text-color:var(--vs-paper)!important;--body-text-color-dark:var(--vs-paper)!important;
+  --body-text-color-subdued:var(--vs-muted)!important;--body-text-color-subdued-dark:var(--vs-muted)!important;
+  --color-accent:var(--vs-copper)!important;--color-accent-soft:var(--vs-selected)!important;--color-accent-soft-dark:var(--vs-selected)!important;
+  --border-color-primary:var(--vs-line)!important;--border-color-primary-dark:var(--vs-line)!important;
+  --border-color-accent:var(--vs-copper)!important;--border-color-accent-dark:var(--vs-copper)!important;
+  --block-background-fill:var(--vs-panel)!important;--block-background-fill-dark:var(--vs-panel)!important;
+  --block-border-color:var(--vs-line)!important;--block-border-color-dark:var(--vs-line)!important;
+  --block-label-text-color:var(--vs-paper)!important;--block-label-text-color-dark:var(--vs-paper)!important;
+  --block-label-background-fill:var(--vs-panel)!important;--block-label-background-fill-dark:var(--vs-panel)!important;
+  --block-title-text-color:var(--vs-paper)!important;--block-title-text-color-dark:var(--vs-paper)!important;
+  --input-background-fill:var(--vs-field)!important;--input-background-fill-dark:var(--vs-field)!important;
+  --input-border-color:var(--vs-input-line)!important;--input-border-color-dark:var(--vs-input-line)!important;
+  --input-border-color-focus:var(--vs-copper)!important;--input-border-color-focus-dark:var(--vs-copper)!important;
+  --input-placeholder-color:var(--vs-muted)!important;--input-placeholder-color-dark:var(--vs-muted)!important;
+  --button-primary-background-fill:var(--vs-copper)!important;--button-primary-background-fill-dark:var(--vs-copper)!important;
+  --button-primary-background-fill-hover:#754323!important;--button-primary-background-fill-hover-dark:#754323!important;
+  --button-primary-text-color:var(--vs-primary-ink)!important;--button-primary-text-color-dark:var(--vs-primary-ink)!important;
+  --button-primary-border-color:var(--vs-copper)!important;--button-primary-border-color-dark:var(--vs-copper)!important;
+  --button-secondary-background-fill:var(--vs-panel)!important;--button-secondary-background-fill-dark:var(--vs-panel)!important;
+  --button-secondary-background-fill-hover:var(--vs-hover)!important;--button-secondary-background-fill-hover-dark:var(--vs-hover)!important;
+  --button-secondary-text-color:var(--vs-paper)!important;--button-secondary-text-color-dark:var(--vs-paper)!important;
+  --button-secondary-border-color:var(--vs-input-line)!important;--button-secondary-border-color-dark:var(--vs-input-line)!important;
+  --checkbox-background-color:var(--vs-field)!important;--checkbox-background-color-dark:var(--vs-field)!important;
+  --checkbox-background-color-selected:var(--vs-copper)!important;--checkbox-background-color-selected-dark:var(--vs-copper)!important;
+  --checkbox-border-color:var(--vs-input-line)!important;--checkbox-border-color-dark:var(--vs-input-line)!important;
+  --checkbox-border-color-selected:var(--vs-copper)!important;--checkbox-border-color-selected-dark:var(--vs-copper)!important;
+  --checkbox-label-text-color:var(--vs-paper)!important;--checkbox-label-text-color-dark:var(--vs-paper)!important;
+  --checkbox-label-background-fill:var(--vs-field)!important;--checkbox-label-background-fill-dark:var(--vs-field)!important;
+  --checkbox-label-background-fill-selected:var(--vs-selected)!important;--checkbox-label-background-fill-selected-dark:var(--vs-selected)!important;
+  --slider-color:var(--vs-copper)!important;--slider-color-dark:var(--vs-copper)!important;
+  --code-background-fill:var(--vs-hover)!important;--code-background-fill-dark:var(--vs-hover)!important;
+  --table-border-color:var(--vs-line)!important;--table-border-color-dark:var(--vs-line)!important;
+  --table-even-background-fill:var(--vs-field)!important;--table-even-background-fill-dark:var(--vs-field)!important;
+  --table-odd-background-fill:var(--vs-panel)!important;--table-odd-background-fill-dark:var(--vs-panel)!important;
+  --error-background-fill:var(--vs-error-surface)!important;--error-background-fill-dark:var(--vs-error-surface)!important;
+  --error-text-color:var(--vs-red)!important;--error-text-color-dark:var(--vs-red)!important;
+  --link-text-color:var(--vs-copper)!important;--link-text-color-dark:var(--vs-copper)!important;
+  --link-text-color-hover:#754323!important;--link-text-color-hover-dark:#754323!important;
+}
+
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] button.primary{color:var(--vs-primary-ink)!important}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] button.primary:hover:not(:disabled){background:#754323!important}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] button.secondary:hover:not(:disabled){background:var(--vs-hover)!important}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] textarea,
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .block .wrap:has(> .wrap-inner input[role="combobox"]){background:var(--vs-field)!important}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .block .wrap .wrap-inner input[role="combobox"]{background:transparent!important}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] input::placeholder,
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] textarea::placeholder{color:var(--vs-muted)!important}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] input[type="checkbox"],
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] input[type="radio"]{background-color:var(--vs-field)!important}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] input:checked{background-color:var(--vs-copper)!important}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] label:has(input[type="radio"]),
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] label:has(input[type="checkbox"]){background:var(--vs-panel)!important}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] label:has(input:checked){background:var(--vs-selected)!important}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] ul.options li{color:var(--vs-paper)}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] ul.options li:hover,
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] ul.options li[aria-selected="true"]{background:var(--vs-selected)!important}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] #vs-preview-column,
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-objective,
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-answer-baseline,
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-answer-selected,
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-genealogy-scroll{background:var(--vs-panel)}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-answer-selected{border-color:var(--vs-copper)}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-form-errors{background:var(--vs-error-surface);border-color:var(--vs-red)}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-form-errors a{color:var(--vs-red)!important}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] #vs-stop-button{border-color:var(--vs-red)!important}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-baseline-line{stroke:var(--vs-muted)}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-baseline-swatch{border-top-color:var(--vs-muted)}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-health-chart,
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-result-summary{background:var(--vs-health-surface);border-color:var(--vs-health-line)}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-dashboard button:hover:not(:disabled){background:var(--vs-hover)}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-dashboard button[aria-pressed="true"],
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-dashboard button.is-selected{background:var(--vs-selected);color:var(--vs-copper)}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-layer{background:var(--vs-hover);border-color:var(--vs-input-line);color:var(--vs-muted)}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-layer-active{background:var(--vs-paper);border-color:var(--vs-paper);color:var(--vs-bg)}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-layer-proposed{background:var(--vs-selected);border-color:var(--vs-copper);color:var(--vs-copper)}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-layer-retained{background:var(--vs-health-surface);border-color:var(--vs-green);color:var(--vs-green)}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-swatch{background:var(--vs-hover);border-color:var(--vs-input-line)}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-swatch-active{background:var(--vs-paper);border-color:var(--vs-paper)}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-swatch-proposed{background:var(--vs-copper);border-color:var(--vs-copper)}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-swatch-kept{background:var(--vs-green);border-color:var(--vs-green)}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-targets code{background:var(--vs-health-surface)}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-loop-failed{border-top-color:var(--vs-red)}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-agent-tools li[data-vs-tool-status="failed"]{border-left-color:var(--vs-red)}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-patch-status{border-color:var(--vs-line)}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-patch-status p{color:var(--vs-muted)}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-table-scroll,
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-genealogy-scroll{scrollbar-color:var(--vs-input-line) transparent}
+html[data-vs-theme="light"] .gradio-container[data-vs-theme="light"] .vs-loop-pending{opacity:1}
